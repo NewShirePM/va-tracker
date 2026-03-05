@@ -179,16 +179,28 @@ function itemUrl(name, id) { return `${SITE}/lists/${name}/items/${id}/fields`; 
 // ============================================================
 // DATA LOADER
 // ============================================================
+async function safeGraphGet(token, name, url) {
+  try {
+    console.log(`[VA Tracker] Loading ${name}...`);
+    const result = await graphGetAll(token, url);
+    console.log(`[VA Tracker] ${name}: ${result.length} items loaded`);
+    return result;
+  } catch (err) {
+    console.warn(`[VA Tracker] ${name} failed: ${err.message} — continuing with empty`);
+    return [];
+  }
+}
+
 async function loadAllData(token) {
-  const [empRaw, configRaw, propsRaw, portRaw, actRaw] = await Promise.all([
-    graphGetAll(token, `${listUrl("Employees")}?expand=fields&$top=200`),
-    graphGetAll(token, `${listUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
-    graphGetAll(token, `${listUrl("VA_Properties")}?expand=fields&$top=200`),
-    graphGetAll(token, `${listUrl("VA_Portfolios")}?expand=fields&$top=200`),
-    graphGetAll(token, `${listUrl("VA_Activity")}?expand=fields&$top=200`),
-  ]);
+  console.log("[VA Tracker] Starting data load...");
+  const empRaw = await safeGraphGet(token, "Employees", `${listUrl("Employees")}?expand=fields&$top=200`);
+  const configRaw = await safeGraphGet(token, "VA_TrackerConfig", `${listUrl("VA_TrackerConfig")}?expand=fields&$top=10`);
+  const propsRaw = await safeGraphGet(token, "VA_Properties", `${listUrl("VA_Properties")}?expand=fields&$top=200`);
+  const portRaw = await safeGraphGet(token, "VA_Portfolios", `${listUrl("VA_Portfolios")}?expand=fields&$top=200`);
+  const actRaw = await safeGraphGet(token, "VA_Activity", `${listUrl("VA_Activity")}?expand=fields&$top=200`);
 
   const employees = empRaw.map(e => ({ id: e.id, ...e.fields }));
+  console.log("[VA Tracker] Employees parsed:", employees.map(e => `${e.Name} (${e.Email}) [${e.JobTitle}] role=${e.VATrackerRole||"auto"}`));
   const config = configRaw.length > 0 ? JSON.parse(configRaw[0].fields.ConfigJSON || "{}") : {};
   const properties = propsRaw.map(p => ({ id: p.id, ...p.fields })).filter(p => p.IsActive !== false);
   const portfolios = portRaw.map(p => ({ id: p.id, ...p.fields })).filter(p => p.IsActive !== false);
@@ -197,6 +209,7 @@ async function loadAllData(token) {
   const vas = employees.filter(e => e.JobTitle === "Virtual Assistant" && e.EmployeeActive !== false);
   const pms = employees.filter(e => e.JobTitle === "Property Manager" && e.EmployeeActive !== false);
 
+  console.log("[VA Tracker] Data load complete:", { employees: employees.length, properties: properties.length, portfolios: portfolios.length, activities: activities.length, vas: vas.length, pms: pms.length });
   return { employees, config, properties, portfolios, activities, vas, pms };
 }
 
@@ -299,21 +312,28 @@ function App() {
   useEffect(() => {
     if (!token || !account) return;
     const email = account.username.toLowerCase();
+    console.log("[VA Tracker] MSAL username:", email);
     setMyEmail(email);
     setLoading(true);
     loadAllData(token).then(d => {
       setData(d);
+      console.log("[VA Tracker] Looking for employee match for:", email);
       const me = d.employees.find(e => (e.Email && e.Email.toLowerCase() === email) || (e.M365UserId && e.M365UserId.toLowerCase() === email) || (e.Email && email.split("@")[0] === e.Email.toLowerCase().split("@")[0]));
+      console.log("[VA Tracker] Employee match:", me ? `${me.Name} (${me.Email}) JobTitle=${me.JobTitle} VATrackerRole=${me.VATrackerRole}` : "NOT FOUND");
       if (!me) { setRole(null); setError("access_denied"); }
       else {
         const r = detectRole(me);
+        console.log("[VA Tracker] Detected role:", r);
         if (!r) { setRole(null); setError("access_denied"); }
         else { setRole(r); setError(null); }
       }
-      // Build local queue from recurring tasks for today
       buildDailyQueue(d, email);
       setLoading(false);
-    }).catch(err => { setError(err.message); setLoading(false); });
+    }).catch(err => { 
+      console.error("[VA Tracker] FATAL load error:", err);
+      setError("load_error: " + err.message); 
+      setLoading(false); 
+    });
   }, [token, account]);
 
   function buildDailyQueue(d, email) {
@@ -660,7 +680,7 @@ function App() {
   // ============================================================
   // RENDER: Access Denied
   // ============================================================
-  if (error === "access_denied" || !role) {
+  if (error || !role) {
     return (
       <div style={S.page}>
         <div style={S.header}>
@@ -669,9 +689,10 @@ function App() {
         <div style={{ ...S.content, textAlign: "center", paddingTop: 80 }}>
           <div style={{ ...S.card, borderLeft: `3px solid ${C.error}` }}>
             <div style={{ fontSize: 40, marginBottom: 16 }}>{"\u{1F6AB}"}</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: C.error, marginBottom: 8 }}>Access Denied</div>
-            <div style={{ color: C.gray400 }}>You don't have access to this application. Contact your administrator.</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: C.error, marginBottom: 8 }}>{error === "access_denied" ? "Access Denied" : "Error Loading"}</div>
+            <div style={{ color: C.gray400 }}>{error === "access_denied" ? "Your account was not matched to an authorized role." : error}</div>
             <div style={{ color: C.gray300, fontSize: 12, marginTop: 12 }}>Signed in as: {myEmail}</div>
+            <div style={{ color: C.gray300, fontSize: 11, marginTop: 8 }}>Check browser console (F12) for details.</div>
           </div>
         </div>
       </div>
