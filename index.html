@@ -9,18 +9,14 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Source Sans 3', 'Segoe UI', -apple-system, sans-serif; background: #F7F8F7; }
   #root { min-height: 100vh; }
-  /* Hide Babel warning */
-  .babel-warning { display: none !important; }
 </style>
 </head>
 <body>
 <div id="root"></div>
-
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
-
 <script type="text/babel" data-type="module">
 const { useState, useEffect, useCallback, useRef } = React;
 
@@ -189,7 +185,7 @@ async function loadAllData(token) {
     graphGetAll(token, `${listUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
     graphGetAll(token, `${listUrl("VA_Properties")}?expand=fields&$top=200`),
     graphGetAll(token, `${listUrl("VA_Portfolios")}?expand=fields&$top=200`),
-    graphGetAll(token, `${listUrl("VA_Activity")}?expand=fields&$top=200&$orderby=fields/Created desc`),
+    graphGetAll(token, `${listUrl("VA_Activity")}?expand=fields&$top=200`),
   ]);
 
   const employees = empRaw.map(e => ({ id: e.id, ...e.fields }));
@@ -307,7 +303,7 @@ function App() {
     setLoading(true);
     loadAllData(token).then(d => {
       setData(d);
-      const me = d.employees.find(e => e.Email && e.Email.toLowerCase() === email);
+      const me = d.employees.find(e => (e.Email && e.Email.toLowerCase() === email) || (e.M365UserId && e.M365UserId.toLowerCase() === email) || (e.Email && email.split("@")[0] === e.Email.toLowerCase().split("@")[0]));
       if (!me) { setRole(null); setError("access_denied"); }
       else {
         const r = detectRole(me);
@@ -675,7 +671,7 @@ function App() {
             <div style={{ fontSize: 40, marginBottom: 16 }}>{"\u{1F6AB}"}</div>
             <div style={{ fontSize: 18, fontWeight: 600, color: C.error, marginBottom: 8 }}>Access Denied</div>
             <div style={{ color: C.gray400 }}>You don't have access to this application. Contact your administrator.</div>
-            <div style={{ color: C.gray300, fontSize: 12, marginTop: 12 }}>{myEmail}</div>
+            <div style={{ color: C.gray300, fontSize: 12, marginTop: 12 }}>Signed in as: {myEmail}</div>
           </div>
         </div>
       </div>
@@ -1530,7 +1526,6 @@ function AdminView({ data, myEmail, account, config, localQueue, coverageQueue, 
   );
 }
 
-// Mount the app
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(React.createElement(App));
 </script>
