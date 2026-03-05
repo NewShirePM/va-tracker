@@ -1,0 +1,1538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VA Productivity Tracker — NewShire PM</title>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Source Sans 3', 'Segoe UI', -apple-system, sans-serif; background: #F7F8F7; }
+  #root { min-height: 100vh; }
+  /* Hide Babel warning */
+  .babel-warning { display: none !important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
+
+<script type="text/babel" data-type="module">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ============================================================
+// FAVICON — Gold box with teal "V" for VA Tracker
+// ============================================================
+(()=>{const l=document.querySelector("link[rel='icon']")||document.createElement("link");l.rel="icon";l.href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23CDA04B'/><text x='16' y='23' font-family='Georgia,serif' font-size='22' font-weight='bold' fill='%2328434C' text-anchor='middle'>V</text></svg>";document.head.appendChild(l)})();
+
+// ============================================================
+// CONFIG
+// ============================================================
+const CONFIG = {
+  clientId: "32e75ffa-747a-4cf0-8209-6a19150c4547",
+  tenantId: "33575d04-ca7b-4396-8011-9eaea4030b46",
+  siteId: "vanrockre.sharepoint.com,a02c1cd8-9f1f-4827-8286-7b6b7ce74232,01202419-6625-4499-b0d5-8ceb1cffdba3",
+  appName: "VA PRODUCTIVITY TRACKER",
+};
+
+const GRAPH = "https://graph.microsoft.com/v1.0";
+const SITE = `${GRAPH}/sites/${CONFIG.siteId}`;
+const SCOPES = ["Sites.ReadWrite.All", "User.Read"];
+
+// ============================================================
+// ROLE DETECTION
+// ============================================================
+const ROLE_MAP = {
+  "Virtual Assistant": "va",
+  "Property Manager": "manager",
+  "Regional/Portfolio Manager": "admin",
+  "Owner/Operator": "admin",
+};
+
+function detectRole(emp) {
+  if (emp.VATrackerRole) return emp.VATrackerRole.toLowerCase();
+  return ROLE_MAP[emp.JobTitle] || null;
+}
+
+// ============================================================
+// BRAND PALETTE — NewShire Light Theme
+// ============================================================
+const C = {
+  headerBg: "#1C3740", headerHover: "#213F4A",
+  teal700: "#28434C", teal600: "#2F5260", teal500: "#3A6577", teal400: "#4A7E91",
+  teal100: "#D6E7EC", teal50: "#EDF4F7",
+  gold700: "#9E7B2F", gold600: "#B8922E", gold500: "#CDA04B", gold400: "#D4AF61",
+  gold100: "#F8F0DB", gold50: "#FFFBF0",
+  white: "#FFFFFF", pageBg: "#F7F8F7",
+  gray100: "#E8EAEA", gray200: "#D0D8DC", gray300: "#A8B0B0", gray400: "#7A8585",
+  gray600: "#3E4A4A", dark: "#1A2A30",
+  success: "#2D8A5A", successBg: "rgba(45,138,90,0.08)",
+  error: "#C44B3B", errorBg: "rgba(196,75,59,0.06)",
+  warning: "#D4960A", warningBg: "rgba(212,150,10,0.08)",
+  info: "#4A78B0", infoBg: "rgba(74,120,176,0.08)",
+};
+
+const font = "'Source Sans 3', 'Segoe UI', -apple-system, sans-serif";
+const mono = "'Source Code Pro', Consolas, monospace";
+
+// ============================================================
+// STYLE HELPERS
+// ============================================================
+const S = {
+  page: { fontFamily: font, background: C.pageBg, minHeight: "100vh", color: C.teal700 },
+  header: { background: C.headerBg, borderBottom: `2px solid ${C.gold500}`, padding: "0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 },
+  headerTitle: { color: "#FFF", fontSize: 16, fontWeight: 700, letterSpacing: "0.05em" },
+  headerSub: { color: C.gold500, fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase" },
+  headerUser: { color: C.teal100, fontSize: 13, textAlign: "right" },
+  tabBar: { background: C.white, borderBottom: `1px solid ${C.gray200}`, display: "flex", gap: 0, padding: "0 20px", overflowX: "auto" },
+  tab: (a) => ({ padding: "12px 20px", fontSize: 14, fontWeight: a ? 600 : 400, color: a ? C.teal700 : C.gray400, borderBottom: `2px solid ${a ? C.gold500 : "transparent"}`, cursor: "pointer", whiteSpace: "nowrap", background: "none", border: "none", fontFamily: font }),
+  content: { maxWidth: 1200, margin: "0 auto", padding: "24px 20px" },
+  card: { background: C.white, border: `1px solid ${C.gray200}`, borderRadius: 6, boxShadow: "0 1px 3px rgba(28,55,64,0.06)", padding: 20, marginBottom: 16 },
+  cardTitle: { fontSize: 18, fontWeight: 600, color: C.teal700, paddingBottom: 12, borderBottom: `1px solid ${C.gray100}`, marginBottom: 16 },
+  label: { display: "block", fontSize: 14, fontWeight: 500, color: C.teal700, marginBottom: 4 },
+  input: { width: "100%", padding: "10px 12px", fontSize: 15, fontFamily: font, color: C.teal700, background: C.white, border: `1px solid ${C.gray200}`, borderRadius: 4, outline: "none", boxSizing: "border-box" },
+  select: { width: "100%", padding: "10px 12px", fontSize: 15, fontFamily: font, color: C.teal700, background: C.white, border: `1px solid ${C.gray200}`, borderRadius: 4, cursor: "pointer", boxSizing: "border-box" },
+  btnPrimary: { display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 20px", fontSize: 14, fontWeight: 600, fontFamily: font, color: "#FFF", background: C.headerBg, border: "none", borderRadius: 4, cursor: "pointer" },
+  btnSecondary: { display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 20px", fontSize: 14, fontWeight: 600, fontFamily: font, color: C.teal700, background: C.white, border: `1px solid ${C.teal100}`, borderRadius: 4, cursor: "pointer" },
+  btnDanger: { display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 20px", fontSize: 14, fontWeight: 600, fontFamily: font, color: "#FFF", background: C.error, border: "none", borderRadius: 4, cursor: "pointer" },
+  btnSuccess: { display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 20px", fontSize: 14, fontWeight: 600, fontFamily: font, color: "#FFF", background: C.success, border: "none", borderRadius: 4, cursor: "pointer" },
+  btnWarning: { display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 20px", fontSize: 14, fontWeight: 600, fontFamily: font, color: C.dark, background: C.warning, border: "none", borderRadius: 4, cursor: "pointer" },
+  btnSm: { padding: "6px 14px", fontSize: 12 },
+  th: { textAlign: "left", padding: "10px 12px", fontSize: 13, fontWeight: 500, color: C.teal700, background: C.teal50, borderBottom: `2px solid ${C.teal100}` },
+  td: { padding: "10px 12px", fontSize: 14, color: C.gray600, borderBottom: `1px solid ${C.gray100}` },
+  kpiCard: { background: C.white, border: `1px solid ${C.gray200}`, borderRadius: 6, padding: 16, textAlign: "center", flex: "1 1 120px", minWidth: 100 },
+  kpiLabel: { fontSize: 12, fontWeight: 500, color: C.gray400, textTransform: "uppercase", letterSpacing: "0.05em" },
+  kpiValue: { fontSize: 28, fontWeight: 700, color: C.teal700, fontFamily: mono },
+  row: { display: "flex", gap: 16, flexWrap: "wrap" },
+};
+
+// ============================================================
+// BADGE COMPONENT
+// ============================================================
+const badgeColors = {
+  success: { color: C.success, bg: C.successBg },
+  error: { color: C.error, bg: C.errorBg },
+  warning: { color: C.warning, bg: C.warningBg },
+  info: { color: C.info, bg: C.infoBg },
+  neutral: { color: C.gray400, bg: C.gray100 },
+};
+function Badge({ type = "neutral", children }) {
+  const m = badgeColors[type] || badgeColors.neutral;
+  return <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 10px", fontSize: 12, fontWeight: 600, borderRadius: 9999, textTransform: "uppercase", letterSpacing: "0.03em", color: m.color, background: m.bg }}>{children}</span>;
+}
+
+const statusBadge = { Completed: "success", Blocked: "error", "In Progress": "warning", Queued: "neutral", Incomplete: "error" };
+const sourceBadge = { Daily: "info", Assigned: "warning", "Ad-Hoc": "neutral", Coverage: "warning" };
+const catIcons = { "Work Orders": "\u{1F527}", Marketing: "\u{1F4E2}", "Tenant Comms": "\u{1F4AC}", Reporting: "\u{1F4CA}", Inspections: "\u{1F50D}", Renewals: "\u{1F4DD}", Accounts: "\u{1F4B0}", "Admin/Other": "\u{1F4C1}" };
+
+// ============================================================
+// HELPERS
+// ============================================================
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "\u2014"; }
+function fmtTime(d) { return d ? new Date(d).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "\u2014"; }
+function fmtMin(m) { if (!m && m !== 0) return "\u2014"; const h = Math.floor(m / 60), r = m % 60; return h > 0 ? `${h}h ${r}m` : `${r}m`; }
+function fmtTimer(s) { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60; const p = (n) => String(n).padStart(2, "0"); return h > 0 ? `${h}:${p(m)}:${p(ss)}` : `${p(m)}:${p(ss)}`; }
+function today() { return new Date().toISOString().slice(0, 10); }
+function daysAgo(d) { return Math.floor((Date.now() - new Date(d).getTime()) / 864e5); }
+function uid() { return Date.now() + "-" + Math.random().toString(36).slice(2, 6); }
+
+// ============================================================
+// GRAPH API LAYER
+// ============================================================
+async function graphGet(token, url) {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`GET ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+async function graphGetAll(token, url) {
+  let all = [], next = url;
+  while (next) {
+    const data = await graphGet(token, next);
+    all = all.concat(data.value || []);
+    next = data["@odata.nextLink"] || null;
+  }
+  return all;
+}
+
+async function graphPost(token, url, fields) {
+  const res = await fetch(url, {
+    method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) throw new Error(`POST ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+async function graphPatch(token, url, fields) {
+  const res = await fetch(url, {
+    method: "PATCH", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) throw new Error(`PATCH ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+function listUrl(name) { return `${SITE}/lists/${name}/items`; }
+function itemUrl(name, id) { return `${SITE}/lists/${name}/items/${id}/fields`; }
+
+// ============================================================
+// DATA LOADER
+// ============================================================
+async function loadAllData(token) {
+  const [empRaw, configRaw, propsRaw, portRaw, actRaw] = await Promise.all([
+    graphGetAll(token, `${listUrl("Employees")}?expand=fields&$top=200`),
+    graphGetAll(token, `${listUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
+    graphGetAll(token, `${listUrl("VA_Properties")}?expand=fields&$top=200`),
+    graphGetAll(token, `${listUrl("VA_Portfolios")}?expand=fields&$top=200`),
+    graphGetAll(token, `${listUrl("VA_Activity")}?expand=fields&$top=200&$orderby=fields/Created desc`),
+  ]);
+
+  const employees = empRaw.map(e => ({ id: e.id, ...e.fields }));
+  const config = configRaw.length > 0 ? JSON.parse(configRaw[0].fields.ConfigJSON || "{}") : {};
+  const properties = propsRaw.map(p => ({ id: p.id, ...p.fields })).filter(p => p.IsActive !== false);
+  const portfolios = portRaw.map(p => ({ id: p.id, ...p.fields })).filter(p => p.IsActive !== false);
+  const activities = actRaw.map(a => ({ id: a.id, ...a.fields }));
+
+  const vas = employees.filter(e => e.JobTitle === "Virtual Assistant" && e.EmployeeActive !== false);
+  const pms = employees.filter(e => e.JobTitle === "Property Manager" && e.EmployeeActive !== false);
+
+  return { employees, config, properties, portfolios, activities, vas, pms };
+}
+
+// ============================================================
+// MSAL AUTH (loaded from CDN)
+// ============================================================
+function useMsal() {
+  const [msalInstance, setMsal] = useState(null);
+  const [account, setAccount] = useState(null);
+  const [token, setToken] = useState(null);
+  const [authError, setAuthError] = useState(null);
+
+  useEffect(() => {
+    const script = document.createElement("script");
+    script.src = "https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js";
+    script.onload = () => {
+      const instance = new window.msal.PublicClientApplication({
+        auth: {
+          clientId: CONFIG.clientId,
+          authority: `https://login.microsoftonline.com/${CONFIG.tenantId}`,
+          redirectUri: window.location.origin,
+        },
+        cache: { cacheLocation: "sessionStorage" },
+      });
+      instance.initialize().then(() => {
+        setMsal(instance);
+        const accounts = instance.getAllAccounts();
+        if (accounts.length > 0) {
+          setAccount(accounts[0]);
+          instance.acquireTokenSilent({ scopes: SCOPES, account: accounts[0] })
+            .then(r => setToken(r.accessToken))
+            .catch(() => {});
+        }
+      });
+    };
+    document.head.appendChild(script);
+  }, []);
+
+  const login = useCallback(async () => {
+    if (!msalInstance) return;
+    try {
+      const resp = await msalInstance.loginPopup({ scopes: SCOPES });
+      setAccount(resp.account);
+      const tokenResp = await msalInstance.acquireTokenSilent({ scopes: SCOPES, account: resp.account });
+      setToken(tokenResp.accessToken);
+      setAuthError(null);
+    } catch (err) {
+      if (err.errorCode !== "user_cancelled") setAuthError(err.message);
+    }
+  }, [msalInstance]);
+
+  const refreshToken = useCallback(async () => {
+    if (!msalInstance || !account) return null;
+    try {
+      const r = await msalInstance.acquireTokenSilent({ scopes: SCOPES, account });
+      setToken(r.accessToken);
+      return r.accessToken;
+    } catch {
+      const r = await msalInstance.acquireTokenPopup({ scopes: SCOPES });
+      setToken(r.accessToken);
+      return r.accessToken;
+    }
+  }, [msalInstance, account]);
+
+  return { msalInstance, account, token, login, refreshToken, authError };
+}
+
+// ============================================================
+// MAIN APP
+// ============================================================
+function App() {
+  const { account, token, login, refreshToken, authError } = useMsal();
+  const [tab, setTab] = useState(0);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [role, setRole] = useState(null);
+  const [myEmail, setMyEmail] = useState(null);
+  const [flash, setFlash] = useState("");
+
+  // Local state for active timers and shift (not persisted until completed)
+  const [activeTimers, setActiveTimers] = useState([]);
+  const [activeShift, setActiveShift] = useState(null);
+  const [coverageQueue, setCoverageQueue] = useState([]);
+  const [localQueue, setLocalQueue] = useState([]);
+  const [tick, setTick] = useState(0);
+
+  // 1-second tick for live timers
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const showFlash = useCallback((msg) => {
+    setFlash(msg);
+    setTimeout(() => setFlash(""), 2500);
+  }, []);
+
+  // Load data on auth
+  useEffect(() => {
+    if (!token || !account) return;
+    const email = account.username.toLowerCase();
+    setMyEmail(email);
+    setLoading(true);
+    loadAllData(token).then(d => {
+      setData(d);
+      const me = d.employees.find(e => e.Email && e.Email.toLowerCase() === email);
+      if (!me) { setRole(null); setError("access_denied"); }
+      else {
+        const r = detectRole(me);
+        if (!r) { setRole(null); setError("access_denied"); }
+        else { setRole(r); setError(null); }
+      }
+      // Build local queue from recurring tasks for today
+      buildDailyQueue(d, email);
+      setLoading(false);
+    }).catch(err => { setError(err.message); setLoading(false); });
+  }, [token, account]);
+
+  function buildDailyQueue(d, email) {
+    if (!d.config.recurringTasks) return;
+    const todayStr = today();
+    // Check which daily tasks already exist in VA_Activity for today
+    const todayTasks = d.activities.filter(a => a.ActivityType === "Task" && a.ActivityDate && a.ActivityDate.slice(0, 10) === todayStr);
+    const existingDescs = new Set(todayTasks.map(t => `${t.VAEmail}|${t.Title}`));
+
+    const queue = [];
+    const coverage = [];
+
+    d.config.recurringTasks.forEach(rt => {
+      if (!rt.active) return;
+      const key = `${rt.vaEmail}|${rt.description}`;
+      if (existingDescs.has(key)) return; // already generated today
+
+      const va = d.vas.find(v => v.Email && v.Email.toLowerCase() === rt.vaEmail.toLowerCase());
+      if (!va) return;
+
+      const prop = rt.propertyId ? d.properties.find(p => p.Title === rt.propertyId) : null;
+      const task = {
+        _localId: uid(),
+        Title: rt.description,
+        VAEmail: va.Email,
+        VAName: va.Name,
+        PropertyId: rt.propertyId || "",
+        PropertyName: prop ? prop.PropertyName : "General",
+        PMName: prop ? prop.PMName : "",
+        Category: d.config.categories.find(c => c.id === rt.category)?.name || "Admin/Other",
+        Source: "Daily",
+        Status: "Queued",
+        Priority: "Normal",
+        ActivityDate: todayStr,
+        ActivityType: "Task",
+      };
+
+      // Check if VA is out
+      const isOut = va.VATrackerStatus === "Out";
+      if (isOut) {
+        task.Source = "Coverage";
+        task.CoverageForEmail = va.Email;
+        task.CoverageForName = va.Name;
+        coverage.push(task);
+      } else {
+        queue.push(task);
+      }
+    });
+
+    setLocalQueue(queue);
+    setCoverageQueue(coverage);
+  }
+
+  // Get token helper (auto-refreshes)
+  async function getToken() {
+    const t = await refreshToken();
+    return t || token;
+  }
+
+  // ── Write task to SharePoint ──
+  async function saveTask(task) {
+    const t = await getToken();
+    const fields = {
+      Title: task.Title,
+      ActivityType: "Task",
+      VAEmail: task.VAEmail,
+      VAName: task.VAName,
+      ActivityDate: task.ActivityDate || new Date().toISOString(),
+      PropertyId: task.PropertyId || "",
+      PropertyName: task.PropertyName || "General",
+      PMName: task.PMName || "",
+      Category: task.Category,
+      Source: task.Source,
+      Status: task.Status,
+      Priority: task.Priority || "Normal",
+      StartTime: task.StartTime || null,
+      EndTime: task.EndTime || null,
+      DurationMin: task.DurationMin || 0,
+      PausedMin: task.PausedMin || 0,
+      Notes: task.Notes || "",
+      CoverageForEmail: task.CoverageForEmail || "",
+      CoverageForName: task.CoverageForName || "",
+      AssignedByEmail: task.AssignedByEmail || "",
+      AssignedByName: task.AssignedByName || "",
+    };
+    return graphPost(t, listUrl("VA_Activity"), fields);
+  }
+
+  // ── Write shift to SharePoint ──
+  async function saveShift(shift) {
+    const t = await getToken();
+    const fields = {
+      Title: `${shift.VAName}-${today()}`,
+      ActivityType: "Shift",
+      VAEmail: shift.VAEmail,
+      VAName: shift.VAName,
+      ActivityDate: shift.ClockIn,
+      StartTime: shift.ClockIn,
+      EndTime: shift.ClockOut,
+      BreakMinutes: shift.BreakMinutes,
+      WorkMinutes: shift.WorkMinutes,
+      BreaksJSON: JSON.stringify(shift.Breaks),
+    };
+    return graphPost(t, listUrl("VA_Activity"), fields);
+  }
+
+  // ── Toggle VA absence ──
+  async function toggleAbsence(va) {
+    const t = await getToken();
+    const newStatus = va.VATrackerStatus === "Out" ? "Active" : "Out";
+    await graphPatch(t, itemUrl("Employees", va.id), { VATrackerStatus: newStatus });
+
+    if (newStatus === "Out") {
+      // Log absence start
+      await graphPost(t, listUrl("VA_Activity"), {
+        Title: `${va.Name}-Out-${today()}`,
+        ActivityType: "Absence",
+        VAEmail: va.Email,
+        VAName: va.Name,
+        ActivityDate: new Date().toISOString(),
+        StartTime: new Date().toISOString(),
+        Status: "Out",
+        MarkedByEmail: myEmail,
+        MarkedByName: account.name || myEmail,
+      });
+      // Move their queued tasks to coverage
+      const moved = localQueue.filter(t => t.VAEmail.toLowerCase() === va.Email.toLowerCase());
+      const remaining = localQueue.filter(t => t.VAEmail.toLowerCase() !== va.Email.toLowerCase());
+      moved.forEach(t => { t.Source = "Coverage"; t.CoverageForEmail = va.Email; t.CoverageForName = va.Name; });
+      setLocalQueue(remaining);
+      setCoverageQueue(prev => [...prev, ...moved]);
+      showFlash(`${va.Name} marked OUT \u2014 ${moved.length} tasks moved to coverage`);
+    } else {
+      showFlash(`${va.Name} marked back IN`);
+    }
+
+    // Reload data
+    const d = await loadAllData(t);
+    setData(d);
+    buildDailyQueue(d, myEmail);
+  }
+
+  // ── Timer actions ──
+  function startTimer(task) {
+    const timer = { ...task, Status: "In Progress", StartTime: new Date().toISOString(), _pausedMs: 0, _pauseStart: null };
+    setActiveTimers(prev => [...prev, timer]);
+    setLocalQueue(prev => prev.filter(t => t._localId !== task._localId));
+    showFlash("Timer started!");
+  }
+
+  function pauseTimer(localId) {
+    setActiveTimers(prev => prev.map(t => t._localId === localId ? { ...t, _pauseStart: Date.now() } : t));
+  }
+
+  function resumeTimer(localId) {
+    setActiveTimers(prev => prev.map(t => {
+      if (t._localId !== localId || !t._pauseStart) return t;
+      return { ...t, _pausedMs: (t._pausedMs || 0) + (Date.now() - t._pauseStart), _pauseStart: null };
+    }));
+  }
+
+  async function finishTimer(localId, status, notes) {
+    const t = activeTimers.find(x => x._localId === localId);
+    if (!t) return;
+    const now = Date.now();
+    let pausedMs = t._pausedMs || 0;
+    if (t._pauseStart) pausedMs += (now - t._pauseStart);
+    const workMs = now - new Date(t.StartTime).getTime() - pausedMs;
+    const durationMin = Math.max(1, Math.round(workMs / 60000));
+    const pausedMin = Math.round(pausedMs / 60000);
+
+    const completed = {
+      ...t,
+      Status: status,
+      EndTime: status === "Completed" ? new Date(now).toISOString() : null,
+      DurationMin: durationMin,
+      PausedMin: pausedMin,
+      Notes: notes || "",
+    };
+
+    try {
+      await saveTask(completed);
+      setActiveTimers(prev => prev.filter(x => x._localId !== localId));
+      showFlash(status === "Completed" ? "Task completed!" : "Task marked " + status);
+      // Reload activities
+      const tok = await getToken();
+      const d = await loadAllData(tok);
+      setData(d);
+    } catch (err) {
+      showFlash("Error saving: " + err.message);
+    }
+  }
+
+  function cancelTimer(localId) {
+    const t = activeTimers.find(x => x._localId === localId);
+    if (!t) return;
+    const restored = { ...t, Status: "Queued", StartTime: null, _pausedMs: 0, _pauseStart: null };
+    setActiveTimers(prev => prev.filter(x => x._localId !== localId));
+    setLocalQueue(prev => [restored, ...prev]);
+  }
+
+  // ── Claim coverage ──
+  function claimCoverage(localId) {
+    const t = coverageQueue.find(x => x._localId === localId);
+    if (!t) return;
+    const me = data.vas.find(v => v.Email.toLowerCase() === myEmail) || data.employees.find(e => e.Email && e.Email.toLowerCase() === myEmail);
+    const claimed = { ...t, VAEmail: myEmail, VAName: me?.Name || myEmail };
+    setCoverageQueue(prev => prev.filter(x => x._localId !== localId));
+    setLocalQueue(prev => [claimed, ...prev]);
+    showFlash(`Claimed! Covering for ${t.CoverageForName}`);
+  }
+
+  // ── Shift clock ──
+  function clockIn() {
+    setActiveShift({ ClockIn: new Date().toISOString(), Breaks: [], _onBreak: false, _breakStart: null });
+    showFlash("Clocked in!");
+  }
+
+  function startBreak() {
+    setActiveShift(prev => prev ? { ...prev, _onBreak: true, _breakStart: new Date().toISOString() } : prev);
+  }
+
+  function endBreak() {
+    setActiveShift(prev => {
+      if (!prev || !prev._breakStart) return prev;
+      return { ...prev, _onBreak: false, Breaks: [...prev.Breaks, { s: prev._breakStart, e: new Date().toISOString() }], _breakStart: null };
+    });
+  }
+
+  async function clockOut() {
+    if (!activeShift) return;
+    const now = new Date();
+    const breaks = [...activeShift.Breaks];
+    if (activeShift._onBreak && activeShift._breakStart) {
+      breaks.push({ s: activeShift._breakStart, e: now.toISOString() });
+    }
+    const breakMs = breaks.reduce((s, b) => s + (new Date(b.e) - new Date(b.s)), 0);
+    const totalMs = now - new Date(activeShift.ClockIn);
+    const breakMin = Math.round(breakMs / 60000);
+    const workMin = Math.round((totalMs - breakMs) / 60000);
+
+    const me = data?.employees.find(e => e.Email && e.Email.toLowerCase() === myEmail);
+    try {
+      await saveShift({
+        VAEmail: myEmail,
+        VAName: me?.Name || myEmail,
+        ClockIn: activeShift.ClockIn,
+        ClockOut: now.toISOString(),
+        BreakMinutes: breakMin,
+        WorkMinutes: workMin,
+        Breaks: breaks,
+      });
+      setActiveShift(null);
+      showFlash("Clocked out!");
+      const tok = await getToken();
+      const d = await loadAllData(tok);
+      setData(d);
+    } catch (err) {
+      showFlash("Error: " + err.message);
+    }
+  }
+
+  // ── Close Day (Admin) ──
+  async function closeDay() {
+    if (!window.confirm("Close the day? This marks all remaining daily tasks as Incomplete and clocks out all VAs.")) return;
+    // Save remaining queue items as Incomplete
+    for (const t of localQueue.filter(t => t.Source === "Daily")) {
+      await saveTask({ ...t, Status: "Incomplete", Notes: "Not started" });
+    }
+    for (const t of coverageQueue) {
+      await saveTask({ ...t, Status: "Incomplete", Notes: "Uncovered \u2014 VA was out" });
+    }
+    setLocalQueue(prev => prev.filter(t => t.Source !== "Daily"));
+    setCoverageQueue([]);
+    if (activeShift) await clockOut();
+    showFlash("Day closed");
+    const tok = await getToken();
+    const d = await loadAllData(tok);
+    setData(d);
+    buildDailyQueue(d, myEmail);
+  }
+
+  // ── Add ad-hoc task ──
+  function addAdHoc(task) {
+    setLocalQueue(prev => [{ ...task, _localId: uid(), Source: "Ad-Hoc", Status: "Queued", ActivityDate: today(), ActivityType: "Task" }, ...prev]);
+    showFlash("Task added!");
+  }
+
+  // ── Assign task (Admin/Manager) ──
+  function assignTask(task) {
+    setLocalQueue(prev => [{ ...task, _localId: uid(), Source: "Assigned", Status: "Queued", ActivityDate: today(), ActivityType: "Task" }, ...prev]);
+    showFlash(`Queued for ${task.VAName}`);
+  }
+
+  // ============================================================
+  // COMPUTED VALUES
+  // ============================================================
+  const isAdmin = role === "admin";
+  const isManager = role === "admin" || role === "manager";
+  const myVa = data?.vas.find(v => v.Email && v.Email.toLowerCase() === myEmail);
+  const myPortfolio = data ? data.portfolios.filter(p => p.VAEmail && p.VAEmail.toLowerCase() === myEmail) : [];
+  const myProps = data ? myPortfolio.map(p => data.properties.find(pr => pr.Title === p.PropertyId)).filter(Boolean) : [];
+  const myQueue = localQueue.filter(t => role === "va" ? t.VAEmail.toLowerCase() === myEmail : true);
+  const myTimers = activeTimers.filter(t => role === "va" ? t.VAEmail.toLowerCase() === myEmail : true);
+
+  // ============================================================
+  // RENDER: Login screen
+  // ============================================================
+  if (!account) {
+    return (
+      <div style={S.page}>
+        <div style={S.header}>
+          <div><div style={S.headerTitle}>{CONFIG.appName}</div><div style={S.headerSub}>NewShire Property Management</div></div>
+        </div>
+        <div style={{ ...S.content, textAlign: "center", paddingTop: 80 }}>
+          <div style={S.card}>
+            <div style={{ fontSize: 40, marginBottom: 16 }}>{"\u23F1"}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: C.teal700, marginBottom: 8 }}>VA Productivity Tracker</div>
+            <div style={{ color: C.gray400, marginBottom: 24 }}>Sign in with your NewShire account to continue.</div>
+            <button style={S.btnPrimary} onClick={login}>Sign In with Microsoft</button>
+            {authError && <div style={{ color: C.error, marginTop: 12, fontSize: 13 }}>{authError}</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // RENDER: Loading
+  // ============================================================
+  if (loading) {
+    return (
+      <div style={S.page}>
+        <div style={S.header}>
+          <div><div style={S.headerTitle}>{CONFIG.appName}</div><div style={S.headerSub}>NewShire Property Management</div></div>
+        </div>
+        <div style={{ ...S.content, textAlign: "center", paddingTop: 80 }}>
+          <div style={{ fontSize: 18, color: C.gray400 }}>Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // RENDER: Access Denied
+  // ============================================================
+  if (error === "access_denied" || !role) {
+    return (
+      <div style={S.page}>
+        <div style={S.header}>
+          <div><div style={S.headerTitle}>{CONFIG.appName}</div><div style={S.headerSub}>NewShire Property Management</div></div>
+        </div>
+        <div style={{ ...S.content, textAlign: "center", paddingTop: 80 }}>
+          <div style={{ ...S.card, borderLeft: `3px solid ${C.error}` }}>
+            <div style={{ fontSize: 40, marginBottom: 16 }}>{"\u{1F6AB}"}</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: C.error, marginBottom: 8 }}>Access Denied</div>
+            <div style={{ color: C.gray400 }}>You don't have access to this application. Contact your administrator.</div>
+            <div style={{ color: C.gray300, fontSize: 12, marginTop: 12 }}>{myEmail}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // RENDER: Tab definitions
+  // ============================================================
+  const TABS = [];
+  if (isManager) TABS.push({ name: "Dashboard", key: "dash" });
+  TABS.push({ name: `My Tasks${myQueue.length ? ` (${myQueue.length})` : ""}`, key: "tasks" });
+  TABS.push({ name: `Active${myTimers.length ? ` (${myTimers.length})` : ""}`, key: "active" });
+  TABS.push({ name: "History", key: "history" });
+  TABS.push({ name: "Scorecard", key: "score" });
+  if (isAdmin) TABS.push({ name: "Admin", key: "admin" });
+
+  const currentTab = TABS[tab]?.key || TABS[0]?.key;
+
+  // ============================================================
+  // RENDER: Main app
+  // ============================================================
+  return (
+    <div style={S.page}>
+      <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@500;700&display=swap" rel="stylesheet" />
+
+      {/* Header */}
+      <div style={S.header}>
+        <div>
+          <div style={S.headerTitle}>{CONFIG.appName}</div>
+          <div style={S.headerSub}>NewShire Property Management</div>
+        </div>
+        <div style={S.headerUser}>
+          <div style={{ fontWeight: 600 }}>{account.name || myEmail}</div>
+          <div style={{ fontSize: 11, color: C.gold500, textTransform: "uppercase" }}>{role}</div>
+          {activeTimers.length > 0 && <Badge type="success">{activeTimers.length} timing</Badge>}
+          {coverageQueue.length > 0 && <Badge type="warning">{coverageQueue.length} coverage</Badge>}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={S.tabBar}>
+        {TABS.map((t, i) => (
+          <button key={t.key} style={S.tab(tab === i)} onClick={() => setTab(i)}>{t.name}</button>
+        ))}
+      </div>
+
+      {/* Flash */}
+      {flash && (
+        <div style={{ background: C.gold50, borderBottom: `1px solid ${C.gold500}`, padding: "8px 20px", fontSize: 13, fontWeight: 600, color: C.gold700, textAlign: "center" }}>
+          {flash}
+        </div>
+      )}
+
+      {/* Content */}
+      <div style={S.content}>
+        {currentTab === "dash" && <DashboardView data={data} localQueue={localQueue} activeTimers={activeTimers} coverageQueue={coverageQueue} myEmail={myEmail} />}
+        {currentTab === "tasks" && <MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} myQueue={myQueue} localQueue={localQueue} coverageQueue={coverageQueue} activeShift={activeShift} activeTimers={activeTimers} tick={tick} onClockIn={clockIn} onStartBreak={startBreak} onEndBreak={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCoverage={claimCoverage} onAddAdHoc={addAdHoc} config={data?.config} />}
+        {currentTab === "active" && <ActiveView timers={myTimers} tick={tick} isManager={isManager} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} />}
+        {currentTab === "history" && <HistoryView data={data} role={role} myEmail={myEmail} isManager={isManager} />}
+        {currentTab === "score" && <ScorecardView data={data} role={role} myEmail={myEmail} isManager={isManager} myVa={myVa} myProps={myProps} />}
+        {currentTab === "admin" && <AdminView data={data} myEmail={myEmail} account={account} config={data?.config} localQueue={localQueue} coverageQueue={coverageQueue} onToggleAbsence={toggleAbsence} onAssignTask={assignTask} onCloseDay={closeDay} />}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// DASHBOARD VIEW
+// ============================================================
+function DashboardView({ data, localQueue, activeTimers, coverageQueue, myEmail }) {
+  if (!data) return null;
+  const last7 = data.activities.filter(a => a.ActivityType === "Task" && daysAgo(a.ActivityDate) <= 7);
+  const completed = last7.filter(a => a.Status === "Completed");
+  const shifts = data.activities.filter(a => a.ActivityType === "Shift" && daysAgo(a.ActivityDate) <= 7);
+  const shiftMin = shifts.reduce((s, a) => s + (a.WorkMinutes || 0), 0);
+  const taskMin = completed.reduce((s, a) => s + (a.DurationMin || 0), 0);
+  const rate = last7.length ? Math.round(completed.length / last7.length * 100) : 0;
+  const util = shiftMin > 0 ? Math.round(taskMin / shiftMin * 100) : 0;
+  const outVAs = data.vas.filter(v => v.VATrackerStatus === "Out");
+
+  return (
+    <div>
+      {/* KPIs */}
+      <div style={{ ...S.row, marginBottom: 24 }}>
+        {[
+          { label: "Tasks (7d)", value: last7.length },
+          { label: "Rate", value: `${rate}%`, color: rate >= 85 ? C.success : undefined },
+          { label: "Shift Hrs", value: fmtMin(shiftMin) },
+          { label: "Task Hrs", value: fmtMin(taskMin) },
+          { label: "Utilization", value: `${util}%`, color: util >= 75 ? C.success : util < 50 && shiftMin > 0 ? C.error : undefined },
+          { label: "Coverage", value: coverageQueue.length, color: coverageQueue.length > 0 ? C.error : C.success },
+          { label: "VAs Out", value: outVAs.length, color: outVAs.length > 0 ? C.warning : undefined },
+        ].map((k, i) => (
+          <div key={i} style={S.kpiCard}>
+            <div style={S.kpiLabel}>{k.label}</div>
+            <div style={{ ...S.kpiValue, color: k.color || C.teal700 }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Kanban */}
+      <div style={S.card}>
+        <div style={S.cardTitle}>{"\u{1F4CB}"} Task Board</div>
+        <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8 }}>
+          {data.vas.map(va => {
+            const isOut = va.VATrackerStatus === "Out";
+            const vQ = localQueue.filter(t => t.VAEmail.toLowerCase() === va.Email.toLowerCase());
+            const vT = activeTimers.filter(t => t.VAEmail.toLowerCase() === va.Email.toLowerCase());
+            const portfolio = data.portfolios.filter(p => p.VAEmail && p.VAEmail.toLowerCase() === va.Email.toLowerCase());
+
+            return (
+              <div key={va.Email} style={{ flex: "1 0 220px", minWidth: 220, background: isOut ? C.errorBg : C.pageBg, borderRadius: 6, padding: 12, border: `1px solid ${isOut ? "rgba(196,75,59,0.2)" : C.gray100}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, paddingBottom: 8, borderBottom: `2px solid ${C.teal100}` }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: isOut ? C.error : C.teal700 }}>{va.Name}{isOut ? " \u{1F6D1}" : ""}</div>
+                    <div style={{ fontSize: 11, color: C.gray400 }}>{portfolio.length} properties</div>
+                  </div>
+                  {isOut ? <Badge type="error">OUT</Badge> : vT.length > 0 ? <Badge type="success">Active</Badge> : <span style={{ fontSize: 11, color: C.gray300 }}>Offline</span>}
+                </div>
+
+                {vT.map(t => (
+                  <div key={t._localId} style={{ background: C.white, border: `1px solid ${C.success}`, borderLeft: `3px solid ${C.success}`, borderRadius: 4, padding: 10, marginBottom: 6 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: C.success, textTransform: "uppercase" }}>{"\u25CF"} In Progress</span>
+                      <Badge type={sourceBadge[t.Source] || "neutral"}>{t.Source}</Badge>
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: C.teal700 }}>{t.Title}</div>
+                    <div style={{ fontSize: 11, color: C.gray400 }}>{t.PropertyName}</div>
+                  </div>
+                ))}
+
+                {vQ.map(t => (
+                  <div key={t._localId} style={{ background: C.white, border: `1px solid ${C.gray200}`, borderLeft: `3px solid ${t.Priority === "Urgent" ? C.error : t.Priority === "High" ? C.warning : C.gray200}`, borderRadius: 4, padding: 10, marginBottom: 6 }}>
+                    <Badge type={sourceBadge[t.Source] || "neutral"}>{t.Source}</Badge>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: C.teal700, marginTop: 4 }}>{t.Title}</div>
+                    <div style={{ fontSize: 11, color: C.gray400 }}>{t.PropertyName}</div>
+                  </div>
+                ))}
+
+                {!vT.length && !vQ.length && (
+                  <div style={{ textAlign: "center", padding: "20px 0", color: isOut ? C.error : C.gray300, fontSize: 12, fontStyle: "italic" }}>
+                    {isOut ? "Out \u2014 tasks in coverage pool" : "No pending tasks"}
+                  </div>
+                )}
+
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.gray100}`, fontSize: 11, color: C.gray400, display: "flex", justifyContent: "space-between" }}>
+                  <span>{vQ.length + vT.length} pending</span>
+                  <span>{vT.length} active</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Coverage alert */}
+      {coverageQueue.length > 0 && (
+        <div style={{ ...S.card, borderLeft: `3px solid ${C.warning}`, background: C.warningBg }}>
+          <div style={{ ...S.cardTitle, color: C.warning }}>{"\u{1F6A8}"} Coverage Queue \u2014 {coverageQueue.length} Unclaimed</div>
+          {coverageQueue.map(t => (
+            <div key={t._localId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid rgba(212,150,10,0.15)" }}>
+              <span>{catIcons[t.Category] || "\u{1F4C1}"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: C.teal700 }}>{t.Title}</div>
+                <div style={{ fontSize: 11, color: C.gray400 }}>{t.PropertyName} · covering {t.CoverageForName}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* VA Performance Table */}
+      <div style={S.card}>
+        <div style={S.cardTitle}>VA Performance — 7 Days</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>{["VA", "Portfolio", "Done", "Rate", "Shift", "Tasks", "Utilization", "Incomplete"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {data.vas.map(va => {
+                const vTasks = last7.filter(a => a.VAEmail === va.Email);
+                const vDone = vTasks.filter(a => a.Status === "Completed");
+                const vInc = vTasks.filter(a => a.Status === "Incomplete");
+                const vShifts = shifts.filter(a => a.VAEmail === va.Email);
+                const vShiftMin = vShifts.reduce((s, a) => s + (a.WorkMinutes || 0), 0);
+                const vTaskMin = vDone.reduce((s, a) => s + (a.DurationMin || 0), 0);
+                const vRate = vTasks.length ? Math.round(vDone.length / vTasks.length * 100) : 0;
+                const vUtil = vShiftMin > 0 ? Math.round(vTaskMin / vShiftMin * 100) : 0;
+                const portfolio = data.portfolios.filter(p => p.VAEmail && p.VAEmail.toLowerCase() === va.Email.toLowerCase());
+
+                return (
+                  <tr key={va.Email} style={{ opacity: va.VATrackerStatus === "Out" ? 0.6 : 1 }}>
+                    <td style={{ ...S.td, fontWeight: 600, color: va.VATrackerStatus === "Out" ? C.error : C.teal700 }}>{va.Name}</td>
+                    <td style={{ ...S.td, fontSize: 12 }}>{portfolio.length} props</td>
+                    <td style={S.td}>{vDone.length}/{vTasks.length}</td>
+                    <td style={S.td}><Badge type={vRate >= 85 ? "success" : vRate >= 60 ? "warning" : "error"}>{vRate}%</Badge></td>
+                    <td style={{ ...S.td, fontFamily: mono }}>{fmtMin(vShiftMin)}</td>
+                    <td style={{ ...S.td, fontFamily: mono }}>{fmtMin(vTaskMin)}</td>
+                    <td style={S.td}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <div style={{ width: 50, height: 7, background: C.gray100, borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ width: `${Math.min(vUtil, 100)}%`, height: "100%", background: vUtil >= 75 ? C.success : vUtil >= 50 ? C.warning : C.error, borderRadius: 4 }} />
+                        </div>
+                        <span style={{ fontFamily: mono, fontSize: 11, fontWeight: 600, color: vUtil >= 75 ? C.success : vUtil >= 50 ? C.warning : C.error }}>{vUtil}%</span>
+                      </div>
+                    </td>
+                    <td style={S.td}>{vInc.length > 0 ? <Badge type="error">{vInc.length}</Badge> : "0"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// MY TASKS VIEW
+// ============================================================
+function MyTasksView({ data, role, myEmail, myVa, myProps, myQueue, localQueue, coverageQueue, activeShift, activeTimers, tick, onClockIn, onStartBreak, onEndBreak, onClockOut, onStartTimer, onClaimCoverage, onAddAdHoc, config }) {
+  const [showForm, setShowForm] = useState(false);
+  const [formCat, setFormCat] = useState("");
+  const [formProp, setFormProp] = useState("");
+  const [formPri, setFormPri] = useState("Normal");
+  const [formDesc, setFormDesc] = useState("");
+
+  const myTasks = role === "va" ? localQueue.filter(t => t.VAEmail.toLowerCase() === myEmail) : localQueue;
+  const dailyTasks = myTasks.filter(t => t.Source === "Daily" && t.ActivityDate === today());
+  const assignedTasks = myTasks.filter(t => t.Source === "Assigned" || t.Source === "Coverage");
+  const adHocTasks = myTasks.filter(t => t.Source === "Ad-Hoc");
+  const myActiveCount = activeTimers.filter(t => role === "va" ? t.VAEmail.toLowerCase() === myEmail : true).length;
+
+  // Shift clock elapsed
+  let shiftElapsed = 0, breakElapsed = 0;
+  if (activeShift) {
+    const now = Date.now();
+    let breakMs = activeShift.Breaks.reduce((s, b) => s + (new Date(b.e) - new Date(b.s)), 0);
+    if (activeShift._onBreak && activeShift._breakStart) breakMs += (now - new Date(activeShift._breakStart).getTime());
+    breakElapsed = Math.floor(breakMs / 1000);
+    shiftElapsed = Math.floor((now - new Date(activeShift.ClockIn).getTime() - breakMs) / 1000);
+  }
+
+  const categories = config?.categories || [];
+  const portfolio = data ? data.portfolios.filter(p => p.VAEmail && p.VAEmail.toLowerCase() === myEmail) : [];
+  const propOptions = portfolio.map(p => data.properties.find(pr => pr.Title === p.PropertyId)).filter(Boolean);
+
+  function handleAddTask() {
+    if (!formDesc || !formCat) return;
+    const cat = categories.find(c => c.id === formCat);
+    const prop = formProp ? data.properties.find(p => p.Title === formProp) : null;
+    onAddAdHoc({
+      Title: formDesc,
+      VAEmail: myEmail,
+      VAName: myVa?.Name || myEmail,
+      PropertyId: formProp || "",
+      PropertyName: prop ? prop.PropertyName : "General",
+      PMName: prop ? prop.PMName : "",
+      Category: cat?.name || "Admin/Other",
+      Priority: formPri,
+    });
+    setFormDesc(""); setFormCat(""); setFormProp(""); setFormPri("Normal"); setShowForm(false);
+  }
+
+  return (
+    <div style={{ maxWidth: 700, margin: "0 auto" }}>
+      {/* Identity */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.teal700 }}>{myVa?.Name || myEmail}</div>
+          <div style={{ fontSize: 12, color: C.gray400 }}>{myProps.length} properties · {myProps.reduce((s, p) => s + (p.Units || 0), 0)} units</div>
+        </div>
+        {myActiveCount > 0 && <Badge type="success">{myActiveCount} timing</Badge>}
+      </div>
+
+      {/* Shift Clock */}
+      <div style={{ ...S.card, borderLeft: `3px solid ${activeShift ? (activeShift._onBreak ? C.warning : C.success) : C.info}` }}>
+        {!activeShift ? (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: C.teal700 }}>{"\u23F0"} Shift Clock</div>
+              <div style={{ fontSize: 12, color: C.gray400 }}>Not clocked in</div>
+            </div>
+            <button style={{ ...S.btnPrimary, background: C.info }} onClick={onClockIn}>{"\u2600"} Clock In</button>
+          </div>
+        ) : (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: activeShift._onBreak ? C.warning : C.success, textTransform: "uppercase" }}>
+                  {activeShift._onBreak ? "\u2615 On Break" : "\u23F0 Clocked In"}
+                </div>
+                <div style={{ fontSize: 11, color: C.gray400 }}>Since {fmtTime(activeShift.ClockIn)} · {activeShift.Breaks.length + (activeShift._onBreak ? 1 : 0)} breaks</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10, color: C.gray400, textTransform: "uppercase" }}>Working</div>
+                <div style={{ fontSize: 24, fontWeight: 700, fontFamily: mono, color: activeShift._onBreak ? C.warning : C.teal700 }}>{fmtTimer(shiftElapsed)}</div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {activeShift._onBreak ? (
+                <button style={{ ...S.btnSuccess, flex: 1 }} onClick={onEndBreak}>{"\u25B6"} End Break</button>
+              ) : (
+                <button style={{ ...S.btnSecondary, flex: 1, color: C.warning, borderColor: C.warning }} onClick={onStartBreak}>{"\u2615"} Break</button>
+              )}
+              <button style={{ ...S.btnDanger, flex: 1 }} onClick={onClockOut}>{"\u{1F319}"} Clock Out</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Coverage */}
+      {coverageQueue.length > 0 && (
+        <div style={{ ...S.card, borderLeft: `3px solid ${C.warning}`, background: C.warningBg }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.warning, marginBottom: 8 }}>{"\u{1F6A8}"} Coverage Needed</div>
+          {coverageQueue.map(t => (
+            <div key={t._localId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid rgba(212,150,10,0.1)" }}>
+              <span>{catIcons[t.Category] || "\u{1F4C1}"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: C.teal700 }}>{t.Title}</div>
+                <div style={{ fontSize: 11, color: C.gray400 }}>{t.PropertyName} · covering {t.CoverageForName}</div>
+              </div>
+              <button style={{ ...S.btnWarning, ...S.btnSm }} onClick={() => onClaimCoverage(t._localId)}>{"\u270B"} Claim</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Daily Tasks */}
+      <div style={S.card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", ...( dailyTasks.length ? { paddingBottom: 12, borderBottom: `1px solid ${C.gray100}`, marginBottom: 8 } : {}) }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.teal700 }}>{"\u{1F4CB}"} Daily Tasks</div>
+          <span style={{ fontSize: 12, color: C.gray400 }}>{dailyTasks.length} left</span>
+        </div>
+        {!dailyTasks.length && <p style={{ color: C.gray400, fontSize: 13, marginTop: 12 }}>All done!</p>}
+        {dailyTasks.map(t => <TaskRow key={t._localId} task={t} onStart={() => onStartTimer(t)} />)}
+      </div>
+
+      {/* Assigned & Coverage */}
+      {assignedTasks.length > 0 && (
+        <div style={{ ...S.card, borderLeft: `3px solid ${C.gold500}` }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.teal700, marginBottom: 8 }}>{"\u{1F4CC}"} Assigned & Coverage</div>
+          {assignedTasks.map(t => <TaskRow key={t._localId} task={t} onStart={() => onStartTimer(t)} />)}
+        </div>
+      )}
+
+      {/* Ad-Hoc */}
+      {adHocTasks.length > 0 && (
+        <div style={S.card}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.teal700, marginBottom: 8 }}>{"\u{1F4DD}"} Extra</div>
+          {adHocTasks.map(t => <TaskRow key={t._localId} task={t} onStart={() => onStartTimer(t)} />)}
+        </div>
+      )}
+
+      {/* Add Task Form */}
+      <div style={S.card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: C.teal700 }}>➕ Add Task</div>
+          <button style={S.btnSecondary} onClick={() => setShowForm(!showForm)}>{showForm ? "Cancel" : "New"}</button>
+        </div>
+        {showForm && (
+          <div style={{ marginTop: 16 }}>
+            <div style={S.row}>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <label style={S.label}>Category *</label>
+                <select style={S.select} value={formCat} onChange={e => setFormCat(e.target.value)}>
+                  <option value="">...</option>
+                  {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <label style={S.label}>Property</label>
+                <select style={S.select} value={formProp} onChange={e => setFormProp(e.target.value)}>
+                  <option value="">General</option>
+                  {propOptions.map(p => <option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}
+                </select>
+              </div>
+              <div style={{ minWidth: 90 }}>
+                <label style={S.label}>Priority</label>
+                <select style={S.select} value={formPri} onChange={e => setFormPri(e.target.value)}>
+                  <option>Normal</option><option>High</option><option>Urgent</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ marginTop: 12, marginBottom: 12 }}>
+              <label style={S.label}>Task *</label>
+              <input style={S.input} value={formDesc} onChange={e => setFormDesc(e.target.value)} placeholder="Describe..." />
+            </div>
+            <button style={{ ...S.btnPrimary, width: "100%" }} onClick={handleAddTask}>+ Queue</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// TASK ROW COMPONENT
+// ============================================================
+function TaskRow({ task, onStart }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.gray100}` }}>
+      <span style={{ fontSize: 18 }}>{catIcons[task.Category] || "\u{1F4C1}"}</span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 500, color: C.teal700 }}>
+          {task.Title}
+          {task.CoverageForName && <> <Badge type="warning">Coverage</Badge></>}
+        </div>
+        <div style={{ fontSize: 12, color: C.gray400 }}>
+          {task.PropertyName}
+          {task.CoverageForName && ` · covering ${task.CoverageForName}`}
+          {task.Priority !== "Normal" && <> · <Badge type={task.Priority === "Urgent" ? "error" : "warning"}>{task.Priority}</Badge></>}
+        </div>
+      </div>
+      <button style={{ ...S.btnSuccess, ...S.btnSm }} onClick={onStart}>{"\u25B6"} Start</button>
+    </div>
+  );
+}
+
+// ============================================================
+// ACTIVE VIEW
+// ============================================================
+function ActiveView({ timers, tick, isManager, onPause, onResume, onFinish, onCancel }) {
+  if (!timers.length) {
+    return (
+      <div style={{ ...S.card, textAlign: "center", padding: 60 }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>{"\u23F1"}</div>
+        <div style={{ fontSize: 18, fontWeight: 600, color: C.teal700 }}>No Active Timers</div>
+        <div style={{ fontSize: 14, color: C.gray400 }}>Start a task to begin tracking time.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom: 14, fontSize: 13, color: C.gray400 }}>{timers.length} running</div>
+      {timers.map(t => {
+        const now = Date.now();
+        const st = new Date(t.StartTime).getTime();
+        let pausedMs = t._pausedMs || 0;
+        const isPaused = !!t._pauseStart;
+        if (isPaused) pausedMs += (now - t._pauseStart);
+        const elapsed = isPaused ? Math.floor((t._pauseStart - st - (t._pausedMs || 0)) / 1000) : Math.floor((now - st - pausedMs) / 1000);
+
+        return (
+          <div key={t._localId} style={{ ...S.card, borderLeft: `4px solid ${isPaused ? C.warning : C.success}`, padding: 0, overflow: "hidden" }}>
+            {/* Timer bar */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", background: isPaused ? C.warningBg : C.successBg }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: isPaused ? C.warning : C.success, textTransform: "uppercase" }}>
+                  {isPaused ? "\u23F8 Paused" : "\u25CF Recording"}
+                </div>
+                <div style={{ fontSize: 11, color: C.gray400, marginTop: 2 }}>
+                  {fmtTime(t.StartTime)} · <Badge type={sourceBadge[t.Source] || "neutral"}>{t.Source}</Badge>
+                  {isManager && ` · ${t.VAName}`}
+                </div>
+              </div>
+              <div style={{ fontSize: 28, fontWeight: 700, fontFamily: mono, color: isPaused ? C.warning : C.teal700 }}>{fmtTimer(elapsed)}</div>
+            </div>
+
+            {/* Task info */}
+            <div style={{ padding: "14px 20px" }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: C.teal700, marginBottom: 4 }}>{t.Title}</div>
+              <div style={{ fontSize: 12, color: C.gray400 }}>{"\u{1F3E0}"} {t.PropertyName} · {catIcons[t.Category] || ""} {t.Category}</div>
+              {t.CoverageForName && <div style={{ fontSize: 11, color: C.warning, marginTop: 2 }}>{"\u{1F504}"} Covering for {t.CoverageForName}</div>}
+            </div>
+
+            {/* Actions */}
+            <div style={{ display: "flex", gap: 8, padding: "0 20px 14px", flexWrap: "wrap" }}>
+              {isPaused ? (
+                <button style={{ ...S.btnSuccess, flex: 1 }} onClick={() => onResume(t._localId)}>{"\u25B6"} Resume</button>
+              ) : (
+                <button style={{ ...S.btnSecondary, flex: 1, color: C.warning, borderColor: C.warning }} onClick={() => onPause(t._localId)}>{"\u23F8"} Pause</button>
+              )}
+              <button style={{ ...S.btnSuccess, flex: 1 }} onClick={() => { const n = prompt("Notes (optional):"); onFinish(t._localId, "Completed", n || ""); }}>{"\u2713"} Done</button>
+              <button style={{ ...S.btnSecondary, color: C.error, borderColor: C.error, padding: "10px 14px" }} onClick={() => { const n = prompt("What's blocking this?"); if (n) onFinish(t._localId, "Blocked", n); }}>{"\u26A0"}</button>
+              <button style={{ ...S.btnSecondary, color: C.gray400, padding: "10px 14px" }} onClick={() => onCancel(t._localId)}>{"\u21A9"}</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================
+// HISTORY VIEW
+// ============================================================
+function HistoryView({ data, role, myEmail, isManager }) {
+  const [view, setView] = useState("tasks");
+  if (!data) return null;
+
+  const tasks = data.activities.filter(a => a.ActivityType === "Task" && (isManager || a.VAEmail?.toLowerCase() === myEmail)).slice(0, 50);
+  const shifts = data.activities.filter(a => a.ActivityType === "Shift" && (isManager || a.VAEmail?.toLowerCase() === myEmail)).slice(0, 30);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <button style={view === "tasks" ? S.btnPrimary : S.btnSecondary} onClick={() => setView("tasks")}>Tasks</button>
+        <button style={view === "shifts" ? S.btnPrimary : S.btnSecondary} onClick={() => setView("shifts")}>Shifts</button>
+      </div>
+
+      {view === "tasks" && (
+        <div style={{ ...S.card, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Date", "VA", "Task", "Source", "Duration", "Status"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {tasks.map((t, i) => (
+                <tr key={i}>
+                  <td style={{ ...S.td, whiteSpace: "nowrap" }}>{fmtDate(t.ActivityDate)}</td>
+                  <td style={{ ...S.td, fontWeight: 500 }}>{t.VAName}</td>
+                  <td style={{ ...S.td, maxWidth: 220 }}>
+                    {t.Title}
+                    {t.CoverageForName && <div style={{ fontSize: 10, color: C.warning }}>{"\u{1F504}"} coverage for {t.CoverageForName}</div>}
+                    {t.Notes && <div style={{ fontSize: 11, color: C.gray400 }}>{"\u{1F4AC}"} {t.Notes}</div>}
+                  </td>
+                  <td style={S.td}><Badge type={sourceBadge[t.Source] || "neutral"}>{t.Source}</Badge></td>
+                  <td style={{ ...S.td, fontFamily: mono, fontWeight: 600 }}>{t.DurationMin ? fmtMin(t.DurationMin) : "\u2014"}</td>
+                  <td style={S.td}><Badge type={statusBadge[t.Status] || "neutral"}>{t.Status}</Badge></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!tasks.length && <div style={{ textAlign: "center", padding: 40, color: C.gray400 }}>No task history yet.</div>}
+        </div>
+      )}
+
+      {view === "shifts" && (
+        <div style={{ ...S.card, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Date", "VA", "In", "Out", "Break", "Working"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {shifts.map((s, i) => (
+                <tr key={i}>
+                  <td style={{ ...S.td, whiteSpace: "nowrap" }}>{fmtDate(s.ActivityDate)}</td>
+                  <td style={{ ...S.td, fontWeight: 500 }}>{s.VAName}</td>
+                  <td style={{ ...S.td, fontFamily: mono, fontSize: 12 }}>{fmtTime(s.StartTime)}</td>
+                  <td style={{ ...S.td, fontFamily: mono, fontSize: 12 }}>{fmtTime(s.EndTime)}</td>
+                  <td style={{ ...S.td, fontFamily: mono }}>{fmtMin(s.BreakMinutes)}</td>
+                  <td style={{ ...S.td, fontFamily: mono, fontWeight: 600 }}>{fmtMin(s.WorkMinutes)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!shifts.length && <div style={{ textAlign: "center", padding: 40, color: C.gray400 }}>No shift history yet.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// SCORECARD VIEW
+// ============================================================
+function ScorecardView({ data, role, myEmail, isManager, myVa, myProps }) {
+  const [selVa, setSelVa] = useState(myEmail);
+  if (!data) return null;
+
+  const va = data.vas.find(v => v.Email?.toLowerCase() === (isManager ? selVa : myEmail)?.toLowerCase()) || myVa;
+  const vaEmail = va?.Email?.toLowerCase() || myEmail;
+  const period = 7;
+
+  const tasks = data.activities.filter(a => a.ActivityType === "Task" && a.VAEmail?.toLowerCase() === vaEmail && daysAgo(a.ActivityDate) <= period);
+  const done = tasks.filter(t => t.Status === "Completed");
+  const blocked = tasks.filter(t => t.Status === "Blocked");
+  const coverage = tasks.filter(t => t.CoverageForEmail);
+  const taskMin = done.reduce((s, t) => s + (t.DurationMin || 0), 0);
+  const rate = tasks.length ? Math.round(done.length / tasks.length * 100) : 0;
+
+  const shifts = data.activities.filter(a => a.ActivityType === "Shift" && a.VAEmail?.toLowerCase() === vaEmail && daysAgo(a.ActivityDate) <= period);
+  const shiftMin = shifts.reduce((s, a) => s + (a.WorkMinutes || 0), 0);
+  const breakMin = shifts.reduce((s, a) => s + (a.BreakMinutes || 0), 0);
+  const util = shiftMin > 0 ? Math.round(taskMin / shiftMin * 100) : 0;
+  const gap = Math.max(0, shiftMin - taskMin);
+
+  const portfolio = data.portfolios.filter(p => p.VAEmail?.toLowerCase() === vaEmail);
+  const vaProps = portfolio.map(p => data.properties.find(pr => pr.Title === p.PropertyId)).filter(Boolean);
+
+  // Category breakdown
+  const catMap = {};
+  tasks.forEach(t => {
+    if (!catMap[t.Category]) catMap[t.Category] = { count: 0, min: 0 };
+    catMap[t.Category].count++;
+    catMap[t.Category].min += (t.DurationMin || 0);
+  });
+  const catList = Object.entries(catMap).sort((a, b) => b[1].min - a[1].min);
+
+  return (
+    <div>
+      {isManager && (
+        <div style={{ ...S.card, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <label style={S.label}>VA</label>
+            <select style={S.select} value={selVa} onChange={e => setSelVa(e.target.value)}>
+              {data.vas.map(v => <option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}{v.VATrackerStatus === "Out" ? " [OUT]" : ""}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {!isManager && va && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.teal700 }}>{va.Name}</div>
+          <div style={{ fontSize: 12, color: C.gray400 }}>{vaProps.length} properties · {vaProps.reduce((s, p) => s + (p.Units || 0), 0)} units</div>
+        </div>
+      )}
+
+      {/* KPIs */}
+      <div style={{ ...S.row, marginBottom: 24 }}>
+        {[
+          { label: "Tasks", value: tasks.length },
+          { label: "Done", value: done.length, color: C.success },
+          { label: "Rate", value: `${rate}%`, color: rate >= 85 ? C.success : undefined },
+          { label: "Shift", value: fmtMin(shiftMin) },
+          { label: "Util", value: `${util}%`, color: util >= 75 ? C.success : util < 50 && shiftMin > 0 ? C.error : undefined },
+          { label: "Gap", value: fmtMin(gap), color: gap > 120 ? C.error : undefined },
+          { label: "Coverage", value: coverage.length, color: coverage.length > 0 ? C.warning : undefined },
+        ].map((k, i) => (
+          <div key={i} style={S.kpiCard}>
+            <div style={S.kpiLabel}>{k.label}</div>
+            <div style={{ ...S.kpiValue, color: k.color || C.teal700 }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Utilization bar */}
+      {shiftMin > 0 && (
+        <div style={{ ...S.card, padding: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.teal700, marginBottom: 10 }}>Time Breakdown</div>
+          <div style={{ display: "flex", height: 24, borderRadius: 4, overflow: "hidden", background: C.gray100 }}>
+            <div style={{ width: `${Math.min(util, 100)}%`, background: C.success, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: "#FFF" }}>{util > 14 ? `${util}%` : ""}</div>
+            {breakMin > 0 && <div style={{ width: `${Math.min(Math.round(breakMin / (shiftMin + breakMin) * 100), 40)}%`, background: C.warning }} />}
+            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: C.gray400 }}>{gap > 0 ? `${fmtMin(gap)} gap` : ""}</div>
+          </div>
+          <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 11, color: C.gray400 }}>
+            <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: C.success, marginRight: 4 }} />Tasks</span>
+            <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: C.warning, marginRight: 4 }} />Breaks</span>
+            <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: C.gray100, marginRight: 4 }} />Gap</span>
+          </div>
+        </div>
+      )}
+
+      <div style={S.row}>
+        {/* Category breakdown */}
+        <div style={{ ...S.card, flex: 1, minWidth: 250 }}>
+          <div style={S.cardTitle}>Time by Category</div>
+          {catList.map(([cat, d]) => (
+            <div key={cat} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${C.gray100}` }}>
+              <span>{catIcons[cat] || "\u{1F4C1}"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.teal700 }}>{cat}</div>
+                <div style={{ fontSize: 11, color: C.gray400 }}>{d.count} tasks</div>
+              </div>
+              <div style={{ fontFamily: mono, fontSize: 13, fontWeight: 700, color: C.teal700 }}>{fmtMin(d.min)}</div>
+            </div>
+          ))}
+          {!catList.length && <p style={{ color: C.gray400, fontSize: 13 }}>No data</p>}
+        </div>
+
+        {/* Property coverage */}
+        <div style={{ ...S.card, flex: 1, minWidth: 220 }}>
+          <div style={S.cardTitle}>Property Coverage</div>
+          {vaProps.map(p => {
+            const touched = tasks.some(t => t.PropertyId === p.Title);
+            return (
+              <div key={p.Title} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 0", borderBottom: `1px solid ${C.gray100}` }}>
+                <span style={{ color: touched ? C.success : C.error, fontSize: 12 }}>{touched ? "\u2713" : "\u2717"}</span>
+                <span style={{ flex: 1, fontSize: 12, color: touched ? C.teal700 : C.gray400 }}>{p.PropertyName}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Blocked */}
+      {blocked.length > 0 && (
+        <div style={{ ...S.card, borderLeft: `3px solid ${C.error}` }}>
+          <div style={{ ...S.cardTitle, color: C.error }}>{"\u26A0"} Blocked</div>
+          {blocked.map((t, i) => (
+            <div key={i} style={{ padding: "6px 0", borderBottom: `1px solid ${C.gray100}` }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: C.teal700 }}>{t.Title}</div>
+              <div style={{ fontSize: 11, color: C.gray400 }}>{t.PropertyName}{t.Notes ? ` · \u{1F4AC} ${t.Notes}` : ""}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// ADMIN VIEW
+// ============================================================
+function AdminView({ data, myEmail, account, config, localQueue, coverageQueue, onToggleAbsence, onAssignTask, onCloseDay }) {
+  const [showAssign, setShowAssign] = useState(false);
+  const [aVa, setAVa] = useState("");
+  const [aCat, setACat] = useState("");
+  const [aProp, setAProp] = useState("");
+  const [aPri, setAPri] = useState("Normal");
+  const [aDesc, setADesc] = useState("");
+
+  if (!data) return null;
+  const categories = config?.categories || [];
+
+  function handleAssign() {
+    if (!aVa || !aCat || !aDesc) return;
+    const va = data.vas.find(v => v.Email === aVa);
+    const cat = categories.find(c => c.id === aCat);
+    const prop = aProp ? data.properties.find(p => p.Title === aProp) : null;
+    onAssignTask({
+      Title: aDesc,
+      VAEmail: aVa,
+      VAName: va?.Name || aVa,
+      PropertyId: aProp || "",
+      PropertyName: prop ? prop.PropertyName : "General",
+      PMName: prop ? prop.PMName : "",
+      Category: cat?.name || "Admin/Other",
+      Priority: aPri,
+      AssignedByEmail: myEmail,
+      AssignedByName: account?.name || myEmail,
+    });
+    setADesc(""); setAVa(""); setACat(""); setAProp(""); setAPri("Normal"); setShowAssign(false);
+  }
+
+  return (
+    <div>
+      {/* VA Absence Management */}
+      <div style={{ ...S.card, borderLeft: `3px solid ${C.error}` }}>
+        <div style={S.cardTitle}>{"\u{1F6D1}"} VA Absence Management</div>
+        <div style={{ fontSize: 12, color: C.gray400, marginBottom: 12 }}>Mark a VA as Out to route their tasks to the coverage queue.</div>
+        {data.vas.map(va => (
+          <div key={va.Email} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${C.gray100}` }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: va.VATrackerStatus === "Out" ? C.error : C.teal700 }}>{va.Name}</div>
+              <div style={{ fontSize: 12, color: C.gray400 }}>{data.portfolios.filter(p => p.VAEmail?.toLowerCase() === va.Email.toLowerCase()).length} properties</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Badge type={va.VATrackerStatus === "Out" ? "error" : "success"}>{va.VATrackerStatus || "Active"}</Badge>
+              <button
+                style={{ ...( va.VATrackerStatus === "Out" ? S.btnSuccess : S.btnDanger), ...S.btnSm }}
+                onClick={() => onToggleAbsence(va)}
+              >
+                {va.VATrackerStatus === "Out" ? "Mark In" : "Mark Out"}
+              </button>
+            </div>
+          </div>
+        ))}
+        {coverageQueue.length > 0 && (
+          <div style={{ marginTop: 12, padding: 10, background: C.warningBg, borderRadius: 4, fontSize: 12, color: C.warning }}>
+            {"\u26A0"} {coverageQueue.length} unclaimed coverage tasks
+          </div>
+        )}
+      </div>
+
+      {/* Assign Task */}
+      <div style={{ ...S.card, borderLeft: `3px solid ${C.gold500}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: C.teal700 }}>{"\u{1F4CC}"} Assign Task to VA</div>
+            <div style={{ fontSize: 12, color: C.gray400 }}>Goes into VA's queue</div>
+          </div>
+          <button style={{ ...S.btnPrimary, background: C.gold500, color: C.dark }} onClick={() => setShowAssign(!showAssign)}>{showAssign ? "Cancel" : "Assign"}</button>
+        </div>
+        {showAssign && (
+          <div style={{ marginTop: 16 }}>
+            <div style={S.row}>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <label style={S.label}>VA *</label>
+                <select style={S.select} value={aVa} onChange={e => setAVa(e.target.value)}>
+                  <option value="">Select VA...</option>
+                  {data.vas.filter(v => v.VATrackerStatus !== "Out").map(v => <option key={v.Email} value={v.Email}>{v.Name}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <label style={S.label}>Category *</label>
+                <select style={S.select} value={aCat} onChange={e => setACat(e.target.value)}>
+                  <option value="">Select...</option>
+                  {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ ...S.row, marginTop: 12 }}>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <label style={S.label}>Property</label>
+                <select style={S.select} value={aProp} onChange={e => setAProp(e.target.value)}>
+                  <option value="">General</option>
+                  {data.properties.map(p => <option key={p.Title} value={p.Title}>{p.PropertyName} ({p.PMName})</option>)}
+                </select>
+              </div>
+              <div style={{ minWidth: 90 }}>
+                <label style={S.label}>Priority</label>
+                <select style={S.select} value={aPri} onChange={e => setAPri(e.target.value)}>
+                  <option>Normal</option><option>High</option><option>Urgent</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ marginTop: 12, marginBottom: 12 }}>
+              <label style={S.label}>Task *</label>
+              <input style={S.input} value={aDesc} onChange={e => setADesc(e.target.value)} placeholder="What needs to be done..." />
+            </div>
+            <button style={{ ...S.btnPrimary, width: "100%" }} onClick={handleAssign}>{"\u{1F4CC}"} Add to Queue</button>
+          </div>
+        )}
+      </div>
+
+      {/* Recurring Tasks (read-only display from config) */}
+      <div style={S.card}>
+        <div style={S.cardTitle}>{"\u{1F4CB}"} Recurring Daily Tasks</div>
+        <div style={{ fontSize: 12, color: C.gray400, marginBottom: 12 }}>Managed in VA_TrackerConfig. Edit in SharePoint or request changes.</div>
+        {data.vas.map(va => {
+          const rt = (config?.recurringTasks || []).filter(r => r.vaEmail?.toLowerCase() === va.Email.toLowerCase() && r.active);
+          if (!rt.length) return null;
+          return (
+            <div key={va.Email}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.teal600, textTransform: "uppercase", marginTop: 12, marginBottom: 6 }}>{va.Name}</div>
+              {rt.map((r, i) => {
+                const cat = categories.find(c => c.id === r.category);
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: `1px solid ${C.gray100}` }}>
+                    <span>{catIcons[cat?.name] || "\u{1F4C1}"}</span>
+                    <div style={{ flex: 1, fontSize: 13, color: C.teal700 }}>{r.description}</div>
+                    <Badge type="success">Active</Badge>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Data Sources */}
+      <div style={{ ...S.card, padding: 14, background: C.teal50, border: `1px solid ${C.teal100}` }}>
+        <div style={{ fontSize: 13, color: C.teal600 }}>
+          <strong>Data Sources:</strong> VAs from Employees list (JobTitle = Virtual Assistant). Properties from VA_Properties. Portfolios from VA_Portfolios. Config from VA_TrackerConfig. Auth via MSAL.
+        </div>
+      </div>
+
+      {/* Close Day */}
+      <div style={{ ...S.card, borderLeft: `3px solid ${C.warning}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: C.teal700 }}>{"\u{1F504}"} Close Day</div>
+            <div style={{ fontSize: 12, color: C.gray400 }}>Marks unfinished daily tasks as Incomplete, clears uncovered tasks.</div>
+          </div>
+          <button style={S.btnWarning} onClick={onCloseDay}>Close Day</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Mount the app
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));
+</script>
+</body>
+</html>
