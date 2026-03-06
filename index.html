@@ -1308,6 +1308,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   const[portVa,setPortVa]=useState("");const[portProp,setPortProp]=useState("");
   const[showAddProp,setShowAddProp]=useState(false);const[npName,setNpName]=useState("");const[npGroup,setNpGroup]=useState("Multifamily");const[npUnits,setNpUnits]=useState("");const[npPm,setNpPm]=useState("");
   const[editPropId,setEditPropId]=useState(null);const[epName,setEpName]=useState("");const[epUnits,setEpUnits]=useState("");
+  const[openRecGroups,setOpenRecGroups]=useState({});
   // Category management
   const[showAddCat,setShowAddCat]=useState(false);const[ncName,setNcName]=useState("");const[ncIcon,setNcIcon]=useState("folder");
   const[editCatId,setEditCatId]=useState(null);const[ecName,setEcName]=useState("");const[ecIcon,setEcIcon]=useState("folder");const[showEcIcons,setShowEcIcons]=useState(false);
@@ -1432,18 +1433,60 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
         <div style={{marginTop:10,marginBottom:6}}><label style={S.label}>Description *</label><input style={S.input} value={rDesc} onChange={e=>setRDesc(e.target.value)} placeholder="e.g., Check AppFolio for new work orders"/></div>
         <div style={{marginBottom:10}}><label style={S.label}>Icon — selected: <span style={{fontSize:18}}>{ICON_MAP[rIcon]||"\u{1F4C1}"}</span></label><div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:4,border:`1px solid ${C.gray200}`,borderRadius:4,padding:6,background:C.white,maxHeight:90,overflowY:"auto"}}>{ICON_OPTIONS.map(opt=><button key={opt.v} title={opt.l} style={{fontSize:16,padding:"2px 4px",background:rIcon===opt.v?C.teal100:"transparent",border:`1px solid ${rIcon===opt.v?C.teal500:"transparent"}`,borderRadius:3,cursor:"pointer",lineHeight:1}} onClick={()=>setRIcon(opt.v)}>{ICON_MAP[opt.v]}</button>)}</div></div>
         <button style={{...S.btn(C.success),width:"100%"}} onClick={addRec}>{"\u2713"} {rProps.length>1?`Add ${rProps.length} Tasks`:"Add"}</button></div>}
-      {data.vas.map(va=>{const vr=rTasks.map((r,i)=>({...r,_i:i})).filter(r=>r.vaEmail?.toLowerCase()===va.Email.toLowerCase());if(!vr.length)return null;
-        return<div key={va.Email} style={{marginBottom:12}}><div style={{fontSize:12,fontWeight:600,color:C.teal600,textTransform:"uppercase",marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${C.teal100}`}}>{va.Name} ({vr.filter(r=>r.active).length} active)</div>
-          {vr.map(r=>{const cat=cats.find(c=>c.id===r.category);const prop=r.propertyId?data.properties.find(p=>p.Title===r.propertyId):null;const isEd=editIdx===r._i;
-            return<div key={r._i} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 0",borderBottom:`1px solid ${C.gray100}`,opacity:r.active?1:0.5}}>
-              <span style={{fontSize:16}}>{getIcon(r.icon||cat?.icon,cat?.name)}</span>
-              <div style={{flex:1,minWidth:0}}>{isEd?<div style={{display:"flex",gap:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={editDesc} onChange={e=>setEditDesc(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveEdit(r._i);if(e.key==="Escape")setEditIdx(null);}} autoFocus/><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>saveEdit(r._i)}>{"\u2713"}</button></div>
-                :<div><div style={{fontSize:12,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditIdx(r._i);setEditDesc(r.description);}}>{r.description}</div><div style={{fontSize:10,color:C.gray400,display:"flex",gap:4,marginTop:1}}>{prop&&<span>{prop.PropertyName}</span>}{r.frequency==="weekly"?<Badge type="info">Weekly · {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][r.dayOfWeek||1]}</Badge>:<Badge type="neutral">Daily</Badge>}</div></div>}</div>
-              {!isEd&&<div style={{display:"flex",gap:3}}>
-                <button style={{...S.btnO(C.info,C.info),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>duplicateRec(r._i)} title="Duplicate for another VA">{"\u{1F4CB}"}</button>
-                <button style={{...S.btnO(r.active?C.warning:C.success,r.active?C.warning:C.success),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>toggleRec(r._i)}>{r.active?"Pause":"On"}</button>
-                <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>deleteRec(r._i)}>{"\u2715"}</button></div>}
-            </div>;})}</div>;})}
+      {data.vas.map(va=>{
+        const vr=rTasks.map((r,i)=>({...r,_i:i})).filter(r=>r.vaEmail?.toLowerCase()===va.Email.toLowerCase());
+        if(!vr.length)return null;
+        // Group by description
+        const grpMap={};
+        vr.forEach(r=>{if(!grpMap[r.description])grpMap[r.description]=[];grpMap[r.description].push(r);});
+        return<div key={va.Email} style={{marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.teal600,textTransform:"uppercase",marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${C.teal100}`}}>{va.Name} ({vr.filter(r=>r.active).length} active)</div>
+          {Object.entries(grpMap).map(([desc,group])=>{
+            const first=group[0];
+            const cat=cats.find(c=>c.id===first.category);
+            const isMulti=group.length>1;
+            const gKey=`${va.Email}|${desc}`;
+            const isOpen=!!openRecGroups[gKey];
+            const allActive=group.every(r=>r.active);
+            return<div key={desc} style={{borderBottom:`1px solid ${C.gray100}`}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"7px 0",cursor:isMulti?"pointer":"default",opacity:group.some(r=>r.active)?1:0.5}} onClick={()=>isMulti&&setOpenRecGroups(p=>({...p,[gKey]:!p[gKey]}))}>
+                <span style={{fontSize:16,flexShrink:0}}>{getIcon(first.icon||cat?.icon,cat?.name)}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                    <span style={{fontSize:12,fontWeight:600,color:C.teal700}}>{desc}</span>
+                    {isMulti&&<span style={{fontSize:10,fontWeight:600,background:C.teal100,color:C.teal700,borderRadius:99,padding:"1px 6px"}}>{group.length} props</span>}
+                    {!isMulti&&(()=>{const p=first.propertyId?data.properties.find(x=>x.Title===first.propertyId):null;return p?<span style={{fontSize:10,color:C.gray400}}>{p.PropertyName}</span>:null;})()}
+                    {first.frequency==="weekly"?<Badge type="info">Weekly · {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][first.dayOfWeek||1]}</Badge>:<Badge type="neutral">Daily</Badge>}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:3,flexShrink:0}} onClick={e=>e.stopPropagation()}>
+                  {isMulti?<>
+                    <button style={{...S.btnO(allActive?C.warning:C.success,allActive?C.warning:C.success),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>group.forEach(r=>{if(r.active===allActive)toggleRec(r._i);})}>{allActive?"Pause All":"On All"}</button>
+                    <span style={{fontSize:11,color:C.gray400,padding:"0 4px",alignSelf:"center"}}>{isOpen?"▲":"▼"}</span>
+                  </>:<>
+                    <button style={{...S.btnO(C.info,C.info),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>duplicateRec(first._i)}>{"📋"}</button>
+                    <button style={{...S.btnO(allActive?C.warning:C.success,allActive?C.warning:C.success),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>toggleRec(first._i)}>{allActive?"Pause":"On"}</button>
+                    <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>deleteRec(first._i)}>✕</button>
+                  </>}
+                </div>
+              </div>
+              {isMulti&&isOpen&&<div style={{marginLeft:22,borderLeft:`2px solid ${C.teal100}`,paddingLeft:10,paddingBottom:4}}>
+                {group.map(r=>{
+                  const prop=r.propertyId?data.properties.find(p=>p.Title===r.propertyId):null;
+                  return<div key={r._i} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",borderBottom:`1px solid ${C.gray100}`,opacity:r.active?1:0.45}}>
+                    <span style={{fontSize:11,flex:1,color:C.teal700}}>{prop?prop.PropertyName:"General"}</span>
+                    <div style={{display:"flex",gap:3}}>
+                      <button style={{...S.btnO(C.info,C.info),...S.btnSm,padding:"2px 6px",fontSize:10}} onClick={()=>duplicateRec(r._i)}>{"📋"}</button>
+                      <button style={{...S.btnO(r.active?C.warning:C.success,r.active?C.warning:C.success),...S.btnSm,padding:"2px 6px",fontSize:10}} onClick={()=>toggleRec(r._i)}>{r.active?"Pause":"On"}</button>
+                      <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"2px 6px",fontSize:10}} onClick={()=>deleteRec(r._i)}>✕</button>
+                    </div>
+                  </div>;
+                })}
+              </div>}
+            </div>;
+          })}
+        </div>;
+      })}
     </div>
 
     {/* Portfolio */}
