@@ -106,6 +106,33 @@ function KPI({label,value,color,sub}){return<div style={S.kpi}><div style={S.kpi
 const stBadge={Completed:"success",Blocked:"error","In Progress":"warning",Queued:"neutral",Incomplete:"error"};
 const srcBadge={Daily:"info",Assigned:"warning","Ad-Hoc":"neutral",Coverage:"warning"};
 const catIcon={"Work Orders":"\u{1F527}",Marketing:"\u{1F4E2}","Tenant Comms":"\u{1F4AC}",Reporting:"\u{1F4CA}",Inspections:"\u{1F50D}",Renewals:"\u{1F4DD}",Accounts:"\u{1F4B0}","Admin/Other":"\u{1F4C1}"};
+const ICON_MAP={
+  wrench:"\u{1F527}",megaphone:"\u{1F4E2}",chat:"\u{1F4AC}",chart:"\u{1F4CA}",search:"\u{1F50D}",
+  document:"\u{1F4DD}",money:"\u{1F4B0}",folder:"\u{1F4C1}",key:"\u{1F511}",house:"\u{1F3E0}",
+  handshake:"\u{1F91D}",clipboard:"\u{1F4CB}",phone:"\u{1F4DE}",email:"\u{1F4E7}",
+  star:"\u{2B50}",calendar:"\u{1F4C5}",clock:"\u{1F551}",checkmark:"\u{2705}",
+  warning:"\u{26A0}\u{FE0F}",lock:"\u{1F512}",person:"\u{1F464}",people:"\u{1F465}",
+  building:"\u{1F3E2}",tools:"\u{1F6E0}\u{FE0F}",truck:"\u{1F69A}",paint:"\u{1F3A8}",
+  tree:"\u{1F333}",water:"\u{1F4A7}",electric:"\u{26A1}",trash:"\u{1F5D1}\u{FE0F}",
+  lease:"\u{1F4C4}",camera:"\u{1F4F7}",computer:"\u{1F4BB}",package:"\u{1F4E6}",
+  bank:"\u{1F3E6}",receipt:"\u{1F9FE}",tag:"\u{1F3F7}\u{FE0F}",fire:"\u{1F525}",
+  clean:"\u{1F9F9}",move:"\u{1F4E6}",pet:"\u{1F43E}",parking:"\u{1F17F}\u{FE0F}",
+};
+const ICON_OPTIONS=[
+  {v:"wrench",l:"Wrench"},{v:"tools",l:"Tools"},{v:"paint",l:"Paint/Design"},{v:"clean",l:"Cleaning"},
+  {v:"fire",l:"Fire/Urgent"},{v:"electric",l:"Electric"},{v:"water",l:"Water/Plumbing"},{v:"trash",l:"Trash"},
+  {v:"tree",l:"Landscaping"},{v:"truck",l:"Truck/Move"},{v:"building",l:"Building"},{v:"house",l:"House"},
+  {v:"parking",l:"Parking"},{v:"key",l:"Key/Access"},{v:"lock",l:"Lock/Security"},
+  {v:"megaphone",l:"Marketing"},{v:"chat",l:"Comms/Chat"},{v:"phone",l:"Phone"},{v:"email",l:"Email"},
+  {v:"people",l:"People/Team"},{v:"person",l:"Person"},{v:"handshake",l:"Handshake"},
+  {v:"document",l:"Document"},{v:"lease",l:"Lease"},{v:"clipboard",l:"Clipboard"},{v:"folder",l:"Folder"},
+  {v:"package",l:"Package"},{v:"receipt",l:"Receipt"},{v:"bank",l:"Bank/Finance"},{v:"money",l:"Money"},
+  {v:"chart",l:"Chart/Report"},{v:"search",l:"Inspection"},{v:"camera",l:"Camera"},
+  {v:"calendar",l:"Calendar"},{v:"clock",l:"Clock/Time"},{v:"computer",l:"Computer"},
+  {v:"checkmark",l:"Checkmark"},{v:"star",l:"Star/Priority"},{v:"tag",l:"Tag"},
+  {v:"move",l:"Move In/Out"},{v:"pet",l:"Pet"},{v:"warning",l:"Warning"},
+];
+function getIcon(iconKey,catName){return ICON_MAP[iconKey]||catIcon[catName]||"\u{1F4C1}";}
 
 // ============================================================
 // HELPERS
@@ -252,14 +279,14 @@ function App(){
       persistedQueued.forEach(a=>{existing.add(`${a.VAEmail}|${a.Title}`);});
 
       const toSave=[];
+      // Group recurring tasks by VA+description — same task across multiple properties = one group
+      const recGroupMap={};
       d.config.recurringTasks.forEach(rt=>{
         if(!rt.active)return;
-        // Frequency check
         const freq=rt.frequency||"daily";
         if(freq==="weekly"){
-          // rt.dayOfWeek: 0=Sun...6=Sat, default Monday(1)
           const targetDow=rt.dayOfWeek!==undefined?rt.dayOfWeek:1;
-          if(todayDow!==targetDow)return; // Not today
+          if(todayDow!==targetDow)return;
         }
         const key=`${rt.vaEmail}|${rt.description}`;
         if(existing.has(key))return;
@@ -267,10 +294,17 @@ function App(){
         if(!va)return;
         const prop=rt.propertyId?d.properties.find(p=>p.Title===rt.propertyId):null;
         const cat=d.config.categories?.find(c=>c.id===rt.category);
-        const src=freq==="weekly"?"Weekly":"Daily";
-        const task={Title:rt.description,VAEmail:va.Email,VAName:va.Name,PropertyId:rt.propertyId||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Source:src,Status:"Queued",Priority:"Normal",ActivityDate:td,ActivityType:"Task"};
+        const taskSrc=freq==="weekly"?"Weekly":"Daily";
+        const task={Title:rt.description,VAEmail:va.Email,VAName:va.Name,PropertyId:rt.propertyId||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Source:taskSrc,Status:"Queued",Priority:"Normal",ActivityDate:td,ActivityType:"Task",icon:rt.icon||""};
         if(va.VATrackerStatus==="Out"){task.Source="Coverage";task.CoverageForEmail=va.Email;task.CoverageForName=va.Name;}
-        toSave.push(task);
+        if(!recGroupMap[key])recGroupMap[key]=[];
+        recGroupMap[key].push(task);
+      });
+      // Assign shared GroupId to groups of 2+ (same task across multiple properties)
+      Object.values(recGroupMap).forEach(tasks=>{
+        if(tasks.length>1){const gid=uid();tasks.forEach(t=>{t.GroupId=gid;});}
+        toSave.push(...tasks);
+      });
       });
 
       // Save new daily tasks to SharePoint in background
@@ -279,7 +313,7 @@ function App(){
           try{
             const tk=await gT();
             for(const task of toSave){
-              const res=await gPost(tk,lUrl("VA_Activity"),{Title:task.Title,ActivityType:"Task",VAEmail:task.VAEmail,VAName:task.VAName,ActivityDate:task.ActivityDate,PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category,Source:task.Source,Status:task.Status,Priority:task.Priority||"Normal",CoverageForEmail:task.CoverageForEmail||"",CoverageForName:task.CoverageForName||""});
+              const res=await gPost(tk,lUrl("VA_Activity"),{Title:task.Title,ActivityType:"Task",VAEmail:task.VAEmail,VAName:task.VAName,ActivityDate:task.ActivityDate,PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category,Source:task.Source,Status:task.Status,Priority:task.Priority||"Normal",CoverageForEmail:task.CoverageForEmail||"",CoverageForName:task.CoverageForName||"",GroupId:task.GroupId||""});
               const saved={...task,_localId:res.id,_spId:res.id,id:res.id};
               if(task.Source==="Coverage"){setCovQ(p=>[...p,saved]);}
               else{setQueue(p=>[...p,saved]);}
@@ -298,7 +332,7 @@ function App(){
   // ── Save task to SharePoint ──
   async function saveTask(task){
     const t=await gT();
-    return gPost(t,lUrl("VA_Activity"),{Title:task.Title,ActivityType:"Task",VAEmail:task.VAEmail,VAName:task.VAName,ActivityDate:task.ActivityDate||new Date().toISOString(),PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category,Source:task.Source,Status:task.Status,Priority:task.Priority||"Normal",StartTime:task.StartTime||null,EndTime:task.EndTime||null,DurationMin:task.DurationMin||0,PausedMin:task.PausedMin||0,Notes:task.Notes||"",CoverageForEmail:task.CoverageForEmail||"",CoverageForName:task.CoverageForName||"",AssignedByEmail:task.AssignedByEmail||"",AssignedByName:task.AssignedByName||""});
+    return gPost(t,lUrl("VA_Activity"),{Title:task.Title,ActivityType:"Task",VAEmail:task.VAEmail,VAName:task.VAName,ActivityDate:task.ActivityDate||new Date().toISOString(),PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category,Source:task.Source,Status:task.Status,Priority:task.Priority||"Normal",StartTime:task.StartTime||null,EndTime:task.EndTime||null,DurationMin:task.DurationMin||0,PausedMin:task.PausedMin||0,Notes:task.Notes||"",CoverageForEmail:task.CoverageForEmail||"",CoverageForName:task.CoverageForName||"",AssignedByEmail:task.AssignedByEmail||"",AssignedByName:task.AssignedByName||"",GroupId:task.GroupId||""});
   }
 
   // ── Save shift ──
@@ -337,29 +371,53 @@ function App(){
 
   // ── Timer actions ──
   async function startTimer(task){
-    const timer={...task,Status:"In Progress",StartTime:new Date().toISOString(),_pMs:0,_pS:null};
-    // Update SharePoint if persisted
-    if(task._spId){try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:"In Progress",StartTime:new Date().toISOString()});}catch(e){console.warn("[VT] Timer start patch failed:",e);}}
-    setTimers(p=>[...p,timer]);setQueue(p=>p.filter(t=>t._localId!==task._localId));fl("Timer started!");
+    const now=new Date().toISOString();
+    const timer={...task,Status:"In Progress",StartTime:now,_pMs:0,_pS:null};
+    const tk=await gT();
+    if(task._spId){try{await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:"In Progress",StartTime:now});}catch(e){console.warn("[VT] Timer start patch failed:",e);}}
+    // If grouped, remove ALL siblings from queue (they're represented by the single group timer)
+    if(task.GroupId){
+      setQueue(p=>p.filter(t=>t.GroupId!==task.GroupId));
+      // Store sibling IDs in timer so we can restore on cancel
+      const siblings=queue.filter(t=>t.GroupId===task.GroupId&&t._localId!==task._localId);
+      timer._groupSiblings=siblings;
+      timer._groupSize=siblings.length+1;
+    }else{
+      setQueue(p=>p.filter(t=>t._localId!==task._localId));
+    }
+    setTimers(p=>[...p,timer]);fl(task.GroupId?`Group timer started — ${(timer._groupSize||1)} properties`:"Timer started!");
   }
   function pauseTimer(id){setTimers(p=>p.map(t=>t._localId===id?{...t,_pS:Date.now()}:t));}
   function resumeTimer(id){setTimers(p=>p.map(t=>{if(t._localId!==id||!t._pS)return t;return{...t,_pMs:(t._pMs||0)+(Date.now()-t._pS),_pS:null};}));}
   async function finishTimer(id,status,notes){
     const t=timers.find(x=>x._localId===id);if(!t)return;
     const now=Date.now();let pMs=t._pMs||0;if(t._pS)pMs+=(now-t._pS);
-    const dur=Math.max(1,Math.round((now-new Date(t.StartTime).getTime()-pMs)/6e4));
+    const rawMs=now-new Date(t.StartTime).getTime();
+    const dur=Math.max(1,Math.round((rawMs-pMs)/6e4));
     const fields={Status:status,EndTime:status==="Completed"?new Date(now).toISOString():null,DurationMin:dur,PausedMin:Math.round(pMs/6e4),Notes:notes||""};
     try{
       const tk=await gT();
       if(t._spId){await gPatch(tk,iUrl("VA_Activity",t._spId),fields);}
       else{await saveTask({...t,...fields});}
-      setTimers(p=>p.filter(x=>x._localId!==id));fl(status==="Completed"?"Task completed!":"Task: "+status);await reload();
+      setTimers(p=>p.filter(x=>x._localId!==id));
+      // If this was a group timer, also finish all remaining queued sub-tasks
+      if(t.GroupId){await finishGroupTimer(t.GroupId,status,notes,rawMs,pMs);}
+      else{fl(status==="Completed"?"Task completed!":"Task: "+status);await reload();}
     }catch(e){fl("Error: "+e.message);}
   }
   async function cancelTimer(id){
     const t=timers.find(x=>x._localId===id);if(!t)return;
-    if(t._spId){try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",t._spId),{Status:"Queued",StartTime:null});}catch(e){console.warn("[VT] Cancel patch failed:",e);}}
-    setTimers(p=>p.filter(x=>x._localId!==id));setQueue(p=>[{...t,Status:"Queued",StartTime:null,_pMs:0,_pS:null},...p]);
+    const tk=await gT();
+    if(t._spId){try{await gPatch(tk,iUrl("VA_Activity",t._spId),{Status:"Queued",StartTime:null});}catch(e){console.warn("[VT] Cancel patch failed:",e);}}
+    setTimers(p=>p.filter(x=>x._localId!==id));
+    if(t.GroupId){
+      // Restore sibling sub-tasks from SP back to local queue
+      try{
+        const siblings=await gAll(tk,`${lUrl("VA_Activity")}?$filter=fields/GroupId eq '${t.GroupId}' and fields/Status eq 'Queued'&expand=fields&$top=100`);
+        const restored=siblings.map(s=>({...s.fields,id:s.id,_localId:s.id,_spId:s.id}));
+        setQueue(p=>[{...t,Status:"Queued",StartTime:null,_pMs:0,_pS:null},...restored,...p]);
+      }catch{setQueue(p=>[{...t,Status:"Queued",StartTime:null,_pMs:0,_pS:null},...p]);}
+    }else{setQueue(p=>[{...t,Status:"Queued",StartTime:null,_pMs:0,_pS:null},...p]);}
   }
 
   // ── Shift clock ──
@@ -416,11 +474,67 @@ function App(){
     }
     try{
       const tk=await gT();
-      const res=await gPost(tk,lUrl("VA_Activity"),{Title:t.Title,ActivityType:"Task",VAEmail:t.VAEmail,VAName:t.VAName,ActivityDate:t.ActivityDate,PropertyId:t.PropertyId||"",PropertyName:t.PropertyName||"General",PMName:t.PMName||"",Category:t.Category,Source:t.Source,Status:t.Status,Priority:t.Priority||"Normal",Notes:t.Notes||"",CoverageForEmail:t.CoverageForEmail||"",CoverageForName:t.CoverageForName||"",AssignedByEmail:t.AssignedByEmail||"",AssignedByName:t.AssignedByName||""});
+      const res=await gPost(tk,lUrl("VA_Activity"),{Title:t.Title,ActivityType:"Task",VAEmail:t.VAEmail,VAName:t.VAName,ActivityDate:t.ActivityDate,PropertyId:t.PropertyId||"",PropertyName:t.PropertyName||"General",PMName:t.PMName||"",Category:t.Category,Source:t.Source,Status:t.Status,Priority:t.Priority||"Normal",Notes:t.Notes||"",CoverageForEmail:t.CoverageForEmail||"",CoverageForName:t.CoverageForName||"",AssignedByEmail:t.AssignedByEmail||"",AssignedByName:t.AssignedByName||"",GroupId:t.GroupId||""});
       const saved={...t,_localId:res.id,_spId:res.id,id:res.id};
       if(t.Source==="Coverage"){setCovQ(p=>[saved,...p]);fl(`${targetVa.Name} is OUT — task sent to coverage pool`);}
       else{setQueue(p=>[saved,...p]);fl("Task added!");}
     }catch(e){fl("Error saving task: "+e.message);}
+  }
+
+  // ── Add grouped tasks (multi-property assign) ──
+  async function addGroupedTasks(baseTask, propList){
+    // propList = array of {PropertyId, PropertyName, PMName} or [] for general
+    if(!propList||propList.length<=1){
+      // Single task — use regular addTask (no group)
+      const single=propList.length===1?{...baseTask,...propList[0]}:baseTask;
+      await addTask(single);return;
+    }
+    const groupId=uid();
+    const tk=await gT();
+    const targetVa=data?.vas.find(v=>v.Email?.toLowerCase()===baseTask.VAEmail?.toLowerCase());
+    const isOut=targetVa&&targetVa.VATrackerStatus==="Out";
+    const saved=[];
+    for(const p of propList){
+      const t={...baseTask,...p,Status:"Queued",ActivityDate:today(),ActivityType:"Task",GroupId:groupId,
+        Source:isOut?"Coverage":baseTask.Source,
+        CoverageForEmail:isOut?targetVa.Email:"",
+        CoverageForName:isOut?targetVa.Name:""};
+      const res=await gPost(tk,lUrl("VA_Activity"),{Title:t.Title,ActivityType:"Task",VAEmail:t.VAEmail,VAName:t.VAName,ActivityDate:t.ActivityDate,PropertyId:t.PropertyId||"",PropertyName:t.PropertyName||"General",PMName:t.PMName||"",Category:t.Category,Source:t.Source,Status:t.Status,Priority:t.Priority||"Normal",Notes:t.Notes||"",CoverageForEmail:t.CoverageForEmail||"",CoverageForName:t.CoverageForName||"",AssignedByEmail:t.AssignedByEmail||"",AssignedByName:t.AssignedByName||"",GroupId:groupId});
+      saved.push({...t,_localId:res.id,_spId:res.id,id:res.id});
+    }
+    if(isOut){setCovQ(p=>[...saved,...p]);fl(`${targetVa.Name} is OUT — ${saved.length} tasks to coverage`);}
+    else{setQueue(p=>[...saved,...p]);fl(`Group created: ${saved.length} properties`);}
+  }
+
+  // ── Complete all tasks in a group (used by group timer finish) ──
+  async function finishGroupTimer(groupId, status, notes, durationMs, pauseMs){
+    const tk=await gT();
+    // Find all tasks in this group across queue and timers
+    const groupTasks=queue.filter(t=>t.GroupId===groupId);
+    const total=groupTasks.length+1; // +1 for the timer task itself
+    const perDur=Math.max(1,Math.round((durationMs-pauseMs)/(total*6e4)));
+    const perPause=Math.round(pauseMs/(total*6e4));
+    const endTime=status==="Completed"?new Date().toISOString():null;
+    // Patch all queued sub-tasks
+    for(const t of groupTasks){
+      if(t._spId){
+        try{await gPatch(tk,iUrl("VA_Activity",t._spId),{Status:status,EndTime:endTime,DurationMin:perDur,PausedMin:perPause,Notes:notes||""});}
+        catch(e){console.warn("[VT] Group patch failed:",e);}
+      }
+    }
+    setQueue(p=>p.filter(t=>t.GroupId!==groupId));
+    await reload();
+  }
+
+  // ── Mark a single sub-task complete from the queue (no timer) ──
+  async function completeSubTask(task, status, notes){
+    const tk=await gT();
+    if(task._spId){
+      try{await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:status,Notes:notes||""});}
+      catch(e){fl("Error: "+e.message);return;}
+    }
+    setQueue(p=>p.map(t=>t._localId===task._localId?{...t,Status:status,Notes:notes||""}:t));
+    fl(status==="Completed"?"Sub-task done!":"Sub-task: "+status);
   }
 
   // ── Delete queued task (admin/manager) ──
@@ -625,12 +739,12 @@ function App(){
         {ck==="gactive"&&<ActiveView timers={timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase()))} tick={tick} isMgr={true} readOnly={true} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
         {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
-        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} config={data?.config}/>}
+        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} guestVAEmails={guestVAEmails}/>}
         {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest}/>}
       </div>
     </div>
   );
@@ -706,7 +820,25 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
                   {isOut?<Badge type="error">OUT</Badge>:vT.length>0?<Badge type="success">Active</Badge>:<span style={{fontSize:10,color:C.gray300}}>Offline</span>}
                 </div>
                 {vT.map(t=><div key={t._localId} style={{background:C.white,border:`1px solid ${C.success}`,borderLeft:`3px solid ${C.success}`,borderRadius:4,padding:8,marginBottom:5}}><div style={{fontSize:10,fontWeight:600,color:C.success,textTransform:"uppercase"}}>{"\u25CF"} In Progress</div><div style={{fontSize:12,fontWeight:500,color:C.teal700}}>{t.Title}</div><div style={{fontSize:10,color:C.gray400}}>{t.PropertyName}</div></div>)}
-                {vQ.map(t=><div key={t._localId} style={{background:C.white,border:`1px solid ${C.gray200}`,borderLeft:`3px solid ${t.Priority==="Urgent"?C.error:t.Priority==="High"?C.warning:C.gray200}`,borderRadius:4,padding:8,marginBottom:5}}><div style={{fontSize:12,fontWeight:500,color:C.teal700}}>{t.Title}</div><div style={{fontSize:10,color:C.gray400}}>{t.PropertyName}</div></div>)}
+                {(()=>{
+                  const seen=new Set();
+                  return vQ.map(t=>{
+                    if(t.GroupId){
+                      if(seen.has(t.GroupId))return null;
+                      seen.add(t.GroupId);
+                      const grp=vQ.filter(x=>x.GroupId===t.GroupId);
+                      const done=grp.filter(x=>x.Status==="Completed").length;
+                      const pct=Math.round(done/grp.length*100);
+                      return<div key={t.GroupId} style={{background:C.white,border:`1px solid ${C.gray200}`,borderLeft:`3px solid ${t.Priority==="Urgent"?C.error:t.Priority==="High"?C.warning:C.teal400}`,borderRadius:4,padding:8,marginBottom:5}}>
+                        <div style={{fontSize:12,fontWeight:500,color:C.teal700}}>{t.Title}</div>
+                        <div style={{fontSize:10,color:C.gray400,marginBottom:4}}>{grp.length} properties</div>
+                        <div style={{height:4,background:C.gray100,borderRadius:2}}><div style={{width:`${pct}%`,height:"100%",background:pct===100?C.success:C.gold500,borderRadius:2}}/></div>
+                        <div style={{fontSize:9,color:C.gray400,marginTop:2}}>{done}/{grp.length} done</div>
+                      </div>;
+                    }
+                    return<div key={t._localId} style={{background:C.white,border:`1px solid ${C.gray200}`,borderLeft:`3px solid ${t.Priority==="Urgent"?C.error:t.Priority==="High"?C.warning:C.gray200}`,borderRadius:4,padding:8,marginBottom:5}}><div style={{fontSize:12,fontWeight:500,color:C.teal700}}>{t.Title}</div><div style={{fontSize:10,color:C.gray400}}>{t.PropertyName}</div></div>;
+                  });
+                })()}
                 {!vT.length&&!vQ.length&&<div style={{textAlign:"center",padding:"16px 0",color:C.gray300,fontSize:11,fontStyle:"italic"}}>{isOut?"Tasks in coverage":"No pending"}</div>}
                 <div style={{marginTop:6,paddingTop:6,borderTop:`1px solid ${C.gray100}`,fontSize:10,color:C.gray400,display:"flex",justifyContent:"space-between"}}><span>{vQ.length+vT.length} pending</span><span>{vT.length} active</span></div>
               </div>
@@ -750,24 +882,104 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
 // ============================================================
 // TASK ROW
 // ============================================================
-function TaskRow({task,onStart,onDelete,showVA}){
-  return(<div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
-    <span style={{fontSize:16}}>{catIcon[task.Category]||"\u{1F4C1}"}</span>
+function TaskRow({task,onStart,onDelete,showVA,onComplete,compact}){
+  return(<div style={{display:"flex",alignItems:"center",gap:8,padding:compact?"5px 0":"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
+    <span style={{fontSize:compact?13:16}}>{getIcon(task.icon,task.Category)}</span>
     <div style={{flex:1,minWidth:0}}>
-      <div style={{fontSize:13,fontWeight:500,color:C.teal700}}>{task.Title}{task.CoverageForName&&<>{" "}<Badge type="warning">Coverage</Badge></>}</div>
+      <div style={{fontSize:compact?12:13,fontWeight:500,color:C.teal700}}>{task.Title}{task.CoverageForName&&<>{" "}<Badge type="warning">Coverage</Badge></>}</div>
       <div style={{fontSize:11,color:C.gray400}}>{showVA?`${task.VAName} · `:""}{task.PropertyName}{task.Priority!=="Normal"&&<>{" · "}<Badge type={task.Priority==="Urgent"?"error":"warning"}>{task.Priority}</Badge></>}{task.Notes&&` · \u{1F4AC} ${task.Notes}`}</div>
     </div>
-    <div style={{display:"flex",gap:4,flexShrink:0}}>
-      {onStart&&<button style={{...S.btn(C.success),...S.btnSm}} onClick={onStart}>{"\u25B6"} Start</button>}
+    <div style={{display:"flex",gap:4,flexShrink:0,alignItems:"center"}}>
+      {task.Status==="Completed"&&<span style={{fontSize:11,color:C.success,fontWeight:600}}>{"\u2713"} Done</span>}
+      {task.Status==="Blocked"&&<Badge type="error">Blocked</Badge>}
+      {task.Status!=="Completed"&&task.Status!=="Blocked"&&onComplete&&<button style={{...S.btnO(C.success,C.success),...S.btnSm,padding:"3px 8px",fontSize:11}} onClick={()=>onComplete(task,"Completed","")}>{"\u2713"}</button>}
+      {task.Status!=="Completed"&&task.Status!=="Blocked"&&onComplete&&<button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:11}} onClick={()=>{const n=prompt("What\'s blocking?");if(n!==null)onComplete(task,"Blocked",n);}}>{"\u26A0"}</button>}
+      {onStart&&task.Status!=="Completed"&&task.Status!=="Blocked"&&<button style={{...S.btn(C.success),...S.btnSm}} onClick={onStart}>{"\u25B6"} Start</button>}
       {onDelete&&<button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"5px 8px"}} onClick={()=>{if(window.confirm("Remove this task?"))onDelete(task);}} title="Remove task">{"\u2715"}</button>}
     </div>
   </div>);
 }
 
 // ============================================================
+// TASK GROUP ROW — collapsible parent for grouped tasks
+// ============================================================
+function TaskGroupRow({tasks,onStartGroup,onDelete,onCompleteSubTask,showVA}){
+  const[expanded,setExpanded]=useState(false);
+  const first=tasks[0];
+  const total=tasks.length;
+  const done=tasks.filter(t=>t.Status==="Completed").length;
+  const blocked=tasks.filter(t=>t.Status==="Blocked").length;
+  const pct=total?Math.round(done/total*100):0;
+  const allDone=done===total;
+  const anyBlocked=blocked>0;
+  const pending=tasks.filter(t=>t.Status!=="Completed"&&t.Status!=="Blocked");
+
+  return(<div style={{borderBottom:`1px solid ${C.gray100}`}}>
+    {/* Group header */}
+    <div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 0",cursor:"pointer"}} onClick={()=>setExpanded(x=>!x)}>
+      <span style={{fontSize:16,flexShrink:0}}>{getIcon(first.icon,first.Category)}</span>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          <span style={{fontSize:13,fontWeight:600,color:allDone?C.success:anyBlocked?C.error:C.teal700}}>{first.Title}</span>
+          <span style={{fontSize:10,fontWeight:600,background:C.teal100,color:C.teal700,borderRadius:99,padding:"1px 7px"}}>{total} properties</span>
+          {first.Priority!=="Normal"&&<Badge type={first.Priority==="Urgent"?"error":"warning"}>{first.Priority}</Badge>}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:3}}>
+          {/* Progress bar */}
+          <div style={{width:80,height:5,background:C.gray100,borderRadius:3,overflow:"hidden",flexShrink:0}}>
+            <div style={{width:`${pct}%`,height:"100%",background:allDone?C.success:anyBlocked?C.error:C.gold500,borderRadius:3,transition:"width 0.3s"}}/>
+          </div>
+          <span style={{fontSize:11,fontWeight:600,color:allDone?C.success:anyBlocked?C.error:C.teal700}}>{pct}%</span>
+          <span style={{fontSize:10,color:C.gray400}}>{done}/{total} done</span>
+          {anyBlocked&&<Badge type="error">{blocked} blocked</Badge>}
+          {showVA&&<span style={{fontSize:10,color:C.gray400}}>{first.VAName}</span>}
+        </div>
+      </div>
+      <div style={{display:"flex",gap:4,flexShrink:0,alignItems:"center"}}>
+        {!allDone&&onStartGroup&&pending.length>0&&<button style={{...S.btn(C.success),...S.btnSm}} onClick={e=>{e.stopPropagation();onStartGroup(first,tasks);}}>{"\u25B6"} Start</button>}
+        {allDone&&<span style={{fontSize:11,color:C.success,fontWeight:700}}>{"\u2713"} Complete</span>}
+        <span style={{fontSize:14,color:C.gray400,userSelect:"none"}}>{expanded?"\u25B2":"\u25BC"}</span>
+      </div>
+    </div>
+    {/* Sub-tasks */}
+    {expanded&&<div style={{marginLeft:24,borderLeft:`2px solid ${C.teal100}`,paddingLeft:10,paddingBottom:4,marginBottom:4}}>
+      {tasks.map(t=>(
+        <TaskRow key={t._localId} task={t} compact={true}
+          onComplete={onCompleteSubTask&&t.Status!=="Completed"?onCompleteSubTask:null}
+          onDelete={onDelete?()=>onDelete(t):null}
+          showVA={false}/>
+      ))}
+    </div>}
+  </div>);
+}
+
+// ============================================================
+// HELPER — group tasks by GroupId for rendering
+// ============================================================
+function groupTasks(tasks){
+  const groups={};const singles=[];
+  tasks.forEach(t=>{
+    if(t.GroupId){
+      if(!groups[t.GroupId])groups[t.GroupId]=[];
+      groups[t.GroupId].push(t);
+    }else{singles.push(t);}
+  });
+  // Return interleaved: each group rendered as one unit, singles as-is
+  // We return {type:"single",task} or {type:"group",tasks:[]}
+  const result=[];
+  tasks.forEach(t=>{
+    if(!t.GroupId){result.push({type:"single",task:t});}
+    else if(groups[t.GroupId]&&!result.find(r=>r.type==="group"&&r.tasks[0].GroupId===t.GroupId)){
+      result.push({type:"group",tasks:groups[t.GroupId]});
+    }
+  });
+  return result;
+}
+
+// ============================================================
 // MY TASKS (VA view)
 // ============================================================
-function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onAddTask,onDeleteTask,config}){
+function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onAddTask,onDeleteTask,onCompleteSubTask,config}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   const isAdm=role==="admin";
   const myTasks=isAdm?queue:queue.filter(t=>t.VAEmail.toLowerCase()===myEmail);
@@ -811,11 +1023,20 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
     {/* Daily */}
     <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",...(daily.length?{paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:6}:{})}}><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Daily Tasks</div><span style={{fontSize:12,color:C.gray400}}>{daily.length} left</span></div>
       {!daily.length&&<p style={{color:C.gray400,fontSize:13,marginTop:10}}>All done!</p>}
-      {daily.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm}/>)}</div>
+      {groupTasks(daily).map((item,i)=>item.type==="single"
+        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
+        :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
+      )}</div>
     {/* Assigned */}
-    {assigned.length>0&&<div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Assigned & Coverage ({assigned.length})</div>{assigned.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm}/>)}</div>}
+    {assigned.length>0&&<div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Assigned & Coverage ({assigned.length})</div>{groupTasks(assigned).map((item,i)=>item.type==="single"
+        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
+        :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
+      )}</div>}
     {/* Ad-Hoc */}
-    {adhoc.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4DD}"} Extra ({adhoc.length})</div>{adhoc.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm}/>)}</div>}
+    {adhoc.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4DD}"} Extra ({adhoc.length})</div>{groupTasks(adhoc).map((item,i)=>item.type==="single"
+        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
+        :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
+      )}</div>}
     {/* Add Task */}
     <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:14,fontWeight:600,color:C.teal700}}>➕ Add Task</div><button style={S.btnO(C.teal700,C.teal100)} onClick={()=>setShowForm(!showForm)}>{showForm?"Cancel":"New"}</button></div>
       {showForm&&<div style={{marginTop:14}}>
@@ -838,7 +1059,17 @@ function ActiveView({timers:tms,tick,isMgr,readOnly,onPause,onResume,onFinish,on
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",background:ip?C.warningBg:C.successBg}}>
         <div><div style={{fontSize:12,fontWeight:600,color:ip?C.warning:C.success,textTransform:"uppercase"}}>{ip?"\u23F8 Paused":"\u25CF Recording"}</div><div style={{fontSize:11,color:C.gray400,marginTop:2}}>{fT(t.StartTime)} · <Badge type={srcBadge[t.Source]||"neutral"}>{t.Source}</Badge>{isMgr&&` · ${t.VAName}`}</div></div>
         <div style={{fontSize:26,fontWeight:700,fontFamily:mono,color:ip?C.warning:C.teal700}}>{fTm(el)}</div></div>
-      <div style={{padding:"12px 16px"}}><div style={{fontSize:14,fontWeight:600,color:C.teal700,marginBottom:3}}>{t.Title}</div><div style={{fontSize:12,color:C.gray400}}>{"\u{1F3E0}"} {t.PropertyName} · {catIcon[t.Category]||""} {t.Category}</div>{t.CoverageForName&&<div style={{fontSize:11,color:C.warning,marginTop:2}}>{"\u{1F504}"} Covering for {t.CoverageForName}</div>}</div>
+      <div style={{padding:"12px 16px"}}>
+        <div style={{fontSize:14,fontWeight:600,color:C.teal700,marginBottom:3}}>{t.Title}</div>
+        {t.GroupId?(<div>
+          <div style={{fontSize:12,color:C.gray400,marginBottom:6}}>{getIcon(t.icon,t.Category)} {t.Category} · Group timer — {t._groupSize||"?"} properties</div>
+          {(t._groupSiblings||[]).map((s,si)=><div key={si} style={{fontSize:11,color:C.gray400,padding:"1px 0"}}>{"  · "}{s.PropertyName}</div>)}
+          <div style={{fontSize:11,color:C.teal600,marginTop:4}}>Finishing will mark all properties complete &amp; split time equally.</div>
+        </div>):(
+          <div style={{fontSize:12,color:C.gray400}}>{"\u{1F3E0}"} {t.PropertyName} · {getIcon(t.icon,t.Category)} {t.Category}</div>
+        )}
+        {t.CoverageForName&&<div style={{fontSize:11,color:C.warning,marginTop:2}}>{"\u{1F504}"} Covering for {t.CoverageForName}</div>}
+      </div>
       {!readOnly&&<div style={{display:"flex",gap:6,padding:"0 16px 12px",flexWrap:"wrap"}}>
         {ip?<button style={{...S.btn(C.success),flex:1}} onClick={()=>onResume(t._localId)}>{"\u25B6"} Resume</button>:<button style={{...S.btnO(C.warning,C.warning),flex:1}} onClick={()=>onPause(t._localId)}>{"\u23F8"} Pause</button>}
         <button style={{...S.btn(C.success),flex:1}} onClick={()=>{const n=prompt("Notes (optional):");onFinish(t._localId,"Completed",n||"");}}>{"\u2713"} Done</button>
@@ -939,7 +1170,7 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails}){
   const isGuest=role==="guest";
   const propFilter=role==="manager"?new Set(mgrProps.map(p=>p.Title)):null;
   const gSet=guestVAEmails?.length>0?new Set(guestVAEmails):null;
-  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status!=="Queued"&&a.Status!=="In Progress"&&(isGuest?(gSet?gSet.has(a.VAEmail?.toLowerCase()):false):(isMgr?(propFilter?propFilter.has(a.PropertyId):true):a.VAEmail?.toLowerCase()===myEmail))).slice(0,50);
+  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status!=="Queued"&&a.Status!=="In Progress"&&!(a.Notes==="Removed by admin")&&(isGuest?(gSet?gSet.has(a.VAEmail?.toLowerCase()):false):(isMgr?(propFilter?propFilter.has(a.PropertyId):true):a.VAEmail?.toLowerCase()===myEmail))).slice(0,50);
   const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&(role==="admin"||a.VAEmail?.toLowerCase()===myEmail)).slice(0,30);
 
   return(<div>
@@ -994,7 +1225,7 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps,guestVAs})
 // ============================================================
 // ADMIN VIEW
 // ============================================================
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest}){
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
@@ -1003,7 +1234,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   const[editPropId,setEditPropId]=useState(null);const[epName,setEpName]=useState("");const[epUnits,setEpUnits]=useState("");
   // Category management
   const[showAddCat,setShowAddCat]=useState(false);const[ncName,setNcName]=useState("");const[ncIcon,setNcIcon]=useState("folder");
-  const[editCatId,setEditCatId]=useState(null);const[ecName,setEcName]=useState("");
+  const[editCatId,setEditCatId]=useState(null);const[ecName,setEcName]=useState("");const[ecIcon,setEcIcon]=useState("folder");const[showEcIcons,setShowEcIcons]=useState(false);
 
   if(!data)return null;
   const cats=config?.categories||[];const rTasks=config?.recurringTasks||[];
@@ -1025,26 +1256,32 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   function selectAllAProps(){const ps=vaProps(aVa);setAProps(ps.map(p=>p.Title));}
 
   function handleAssign(){if(!aVa||!aCat||!aDesc)return;const va=data.vas.find(v=>v.Email===aVa);const cat=cats.find(c=>c.id===aCat);
-    const propList=aProps.length>0?aProps:[""];// empty string = General
-    propList.forEach(pid=>{const prop=pid?data.properties.find(p=>p.Title===pid):null;
-      onAssignTask({Title:aDesc,VAEmail:aVa,VAName:va?.Name||aVa,PropertyId:pid||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Priority:aPri,Source:"Assigned",AssignedByEmail:myEmail,AssignedByName:acct?.name||myEmail,Notes:aNotes});
-    });
+    const base={Title:aDesc,VAEmail:aVa,VAName:va?.Name||aVa,Category:cat?.name||"Admin/Other",Priority:aPri,Source:"Assigned",AssignedByEmail:myEmail,AssignedByName:acct?.name||myEmail,Notes:aNotes};
+    if(aProps.length>1){
+      // Multi-property → grouped tasks
+      const propObjs=aProps.map(pid=>{const prop=data.properties.find(p=>p.Title===pid);return{PropertyId:pid,PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:""};});
+      onAddGroupedTasks(base,propObjs);
+    }else{
+      const pid=aProps[0]||"";const prop=pid?data.properties.find(p=>p.Title===pid):null;
+      onAssignTask({...base,PropertyId:pid,PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:""});
+    }
     setADesc("");setAVa("");setACat("");setAProps([]);setAPri("Normal");setANotes("");setShowAssign(false);}
 
   // Multi-property + weekly for recurring
   const[rProps,setRProps]=useState([]);
   const[rFreq,setRFreq]=useState("daily");
   const[rDay,setRDay]=useState(1); // Monday default
+  const[rIcon,setRIcon]=useState("folder");
   function toggleRProp(id){setRProps(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);}
   function selectAllRProps(){const ps=vaProps(rVa);setRProps(ps.map(p=>p.Title));}
 
   function addRec(){if(!rVa||!rCat||!rDesc)return;
     const propList=rProps.length>0?rProps:[""];
-    const newTasks=propList.map(pid=>({vaEmail:rVa,category:rCat,description:rDesc,propertyId:pid,active:true,frequency:rFreq,dayOfWeek:rFreq==="weekly"?rDay:undefined}));
-    saveRec([...rTasks,...newTasks]);setRDesc("");setRVa("");setRCat("");setRProps([]);setRFreq("daily");setRDay(1);setShowRec(false);}
+    const newTasks=propList.map(pid=>({vaEmail:rVa,category:rCat,description:rDesc,propertyId:pid,active:true,frequency:rFreq,dayOfWeek:rFreq==="weekly"?rDay:undefined,icon:rIcon}));
+    saveRec([...rTasks,...newTasks]);setRDesc("");setRVa("");setRCat("");setRProps([]);setRFreq("daily");setRDay(1);setRIcon("folder");setShowRec(false);}
 
   // Duplicate recurring task for different VA
-  function duplicateRec(i){const r=rTasks[i];setRVa("");setRCat(r.category);setRDesc(r.description);setRProps(r.propertyId?[r.propertyId]:[]);setRFreq(r.frequency||"daily");setRDay(r.dayOfWeek!==undefined?r.dayOfWeek:1);setShowRec(true);}
+  function duplicateRec(i){const r=rTasks[i];setRVa("");setRCat(r.category);setRDesc(r.description);setRProps(r.propertyId?[r.propertyId]:[]);setRFreq(r.frequency||"daily");setRDay(r.dayOfWeek!==undefined?r.dayOfWeek:1);setRIcon(r.icon||"folder");setShowRec(true);}
 
   // Guest management state
   const[showAddGuest,setShowAddGuest]=useState(false);
@@ -1072,7 +1309,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       {showAssign&&<div style={{marginTop:14}}>
         <div style={S.row}><div style={{flex:1,minWidth:140}}><label style={S.label}>VA *</label><select style={S.select} value={aVa} onChange={e=>{setAVa(e.target.value);setAProps([]);}}><option value="">Select...</option>{data.vas.filter(v=>v.VATrackerStatus!=="Out").map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <div style={{flex:1,minWidth:140}}><label style={S.label}>Category *</label><select style={S.select} value={aCat} onChange={e=>setACat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
-        <div style={{marginTop:10}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}><label style={S.label}>Properties {aProps.length>0&&`(${aProps.length} selected)`}</label>{aVa&&<button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"2px 8px",fontSize:10}} onClick={()=>aProps.length===vaProps(aVa).length?setAProps([]):selectAllAProps()}>{aProps.length===vaProps(aVa).length?"Clear All":"Select All"}</button>}</div>
+        <div style={{marginTop:10}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}><label style={S.label}>Properties {aProps.length>0&&`(${aProps.length} selected)`}</label>{aVa&&<div style={{display:"flex",gap:3}}><button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"2px 8px",fontSize:10}} onClick={selectAllAProps}>ALL</button><button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm,padding:"2px 8px",fontSize:10}} onClick={()=>setAProps([])}>None</button></div>}</div>
           <div style={{border:`1px solid ${C.gray200}`,borderRadius:4,padding:8,maxHeight:160,overflowY:"auto",background:C.white}}>
             <label style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:13,color:C.gray400,cursor:"pointer",borderBottom:`1px solid ${C.gray100}`}}><input type="checkbox" checked={aProps.length===0} onChange={()=>setAProps([])}/>General (no specific property)</label>
             {(aVa?vaProps(aVa):data.properties).map(p=><label key={p.Title} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:13,color:C.teal700,cursor:"pointer"}}><input type="checkbox" checked={aProps.includes(p.Title)} onChange={()=>toggleAProp(p.Title)}/>{p.PropertyName} ({p.Units}u)</label>)}
@@ -1091,19 +1328,20 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       {showRec&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}><div style={{flex:1,minWidth:130}}><label style={S.label}>VA *</label><select style={S.select} value={rVa} onChange={e=>{setRVa(e.target.value);setRProps([]);}}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <div style={{flex:1,minWidth:130}}><label style={S.label}>Category *</label><select style={S.select} value={rCat} onChange={e=>setRCat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
-        <div style={{marginTop:10}}><label style={S.label}>Properties {rProps.length>0&&`(${rProps.length} selected)`}</label>
+        <div style={{marginTop:10}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}><label style={S.label}>Properties {rProps.length>0&&`(${rProps.length} selected)`}</label>{rVa&&<div style={{display:"flex",gap:3}}><button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"2px 8px",fontSize:10}} onClick={selectAllRProps}>ALL</button><button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm,padding:"2px 8px",fontSize:10}} onClick={()=>setRProps([])}>None</button></div>}</div>
           <div style={{border:`1px solid ${C.gray200}`,borderRadius:4,padding:8,maxHeight:140,overflowY:"auto",background:C.white}}>
             <label style={{display:"flex",alignItems:"center",gap:6,padding:"3px 0",fontSize:12,color:C.gray400,cursor:"pointer",borderBottom:`1px solid ${C.gray100}`}}><input type="checkbox" checked={rProps.length===0} onChange={()=>setRProps([])}/>General</label>
             {(rVa?vaProps(rVa):data.properties).map(p=><label key={p.Title} style={{display:"flex",alignItems:"center",gap:6,padding:"3px 0",fontSize:12,color:C.teal700,cursor:"pointer"}}><input type="checkbox" checked={rProps.includes(p.Title)} onChange={()=>toggleRProp(p.Title)}/>{p.PropertyName}</label>)}
           </div>
         </div>
-        <div style={{marginTop:10,marginBottom:10}}><label style={S.label}>Description *</label><input style={S.input} value={rDesc} onChange={e=>setRDesc(e.target.value)} placeholder="e.g., Check AppFolio for new work orders"/></div>
+        <div style={{marginTop:10,marginBottom:6}}><label style={S.label}>Description *</label><input style={S.input} value={rDesc} onChange={e=>setRDesc(e.target.value)} placeholder="e.g., Check AppFolio for new work orders"/></div>
+        <div style={{marginBottom:10}}><label style={S.label}>Icon — selected: <span style={{fontSize:18}}>{ICON_MAP[rIcon]||"\u{1F4C1}"}</span></label><div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:4,border:`1px solid ${C.gray200}`,borderRadius:4,padding:6,background:C.white,maxHeight:90,overflowY:"auto"}}>{ICON_OPTIONS.map(opt=><button key={opt.v} title={opt.l} style={{fontSize:16,padding:"2px 4px",background:rIcon===opt.v?C.teal100:"transparent",border:`1px solid ${rIcon===opt.v?C.teal500:"transparent"}`,borderRadius:3,cursor:"pointer",lineHeight:1}} onClick={()=>setRIcon(opt.v)}>{ICON_MAP[opt.v]}</button>)}</div></div>
         <button style={{...S.btn(C.success),width:"100%"}} onClick={addRec}>{"\u2713"} {rProps.length>1?`Add ${rProps.length} Tasks`:"Add"}</button></div>}
       {data.vas.map(va=>{const vr=rTasks.map((r,i)=>({...r,_i:i})).filter(r=>r.vaEmail?.toLowerCase()===va.Email.toLowerCase());if(!vr.length)return null;
         return<div key={va.Email} style={{marginBottom:12}}><div style={{fontSize:12,fontWeight:600,color:C.teal600,textTransform:"uppercase",marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${C.teal100}`}}>{va.Name} ({vr.filter(r=>r.active).length} active)</div>
           {vr.map(r=>{const cat=cats.find(c=>c.id===r.category);const prop=r.propertyId?data.properties.find(p=>p.Title===r.propertyId):null;const isEd=editIdx===r._i;
             return<div key={r._i} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 0",borderBottom:`1px solid ${C.gray100}`,opacity:r.active?1:0.5}}>
-              <span>{catIcon[cat?.name]||"\u{1F4C1}"}</span>
+              <span style={{fontSize:16}}>{getIcon(r.icon||cat?.icon,cat?.name)}</span>
               <div style={{flex:1,minWidth:0}}>{isEd?<div style={{display:"flex",gap:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={editDesc} onChange={e=>setEditDesc(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveEdit(r._i);if(e.key==="Escape")setEditIdx(null);}} autoFocus/><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>saveEdit(r._i)}>{"\u2713"}</button></div>
                 :<div><div style={{fontSize:12,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditIdx(r._i);setEditDesc(r.description);}}>{r.description}</div><div style={{fontSize:10,color:C.gray400,display:"flex",gap:4,marginTop:1}}>{prop&&<span>{prop.PropertyName}</span>}{r.frequency==="weekly"?<Badge type="info">Weekly · {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][r.dayOfWeek||1]}</Badge>:<Badge type="neutral">Daily</Badge>}</div></div>}</div>
               {!isEd&&<div style={{display:"flex",gap:3}}>
@@ -1156,23 +1394,10 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       {showAddCat&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}>
           <div style={{flex:2,minWidth:150}}><label style={S.label}>Category Name *</label><input style={S.input} value={ncName} onChange={e=>setNcName(e.target.value)} placeholder="e.g., Leasing"/></div>
-          <div style={{flex:1,minWidth:120}}><label style={S.label}>Icon</label>
-            <select style={S.select} value={ncIcon} onChange={e=>setNcIcon(e.target.value)}>
-              <option value="wrench">{"\u{1F527}"} Wrench</option>
-              <option value="megaphone">{"\u{1F4E2}"} Megaphone</option>
-              <option value="chat">{"\u{1F4AC}"} Chat</option>
-              <option value="chart">{"\u{1F4CA}"} Chart</option>
-              <option value="search">{"\u{1F50D}"} Search</option>
-              <option value="document">{"\u{1F4DD}"} Document</option>
-              <option value="money">{"\u{1F4B0}"} Money</option>
-              <option value="folder">{"\u{1F4C1}"} Folder</option>
-              <option value="key">{"\u{1F511}"} Key</option>
-              <option value="house">{"\u{1F3E0}"} House</option>
-              <option value="handshake">{"\u{1F91D}"} Handshake</option>
-              <option value="clipboard">{"\u{1F4CB}"} Clipboard</option>
-              <option value="phone">{"\u{1F4DE}"} Phone</option>
-              <option value="email">{"\u{1F4E7}"} Email</option>
-            </select>
+          <div style={{flex:"0 0 auto"}}><label style={S.label}>Icon — selected: <span style={{fontSize:18}}>{ICON_MAP[ncIcon]||"\u{1F4C1}"}</span></label>
+            <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:4,maxWidth:320,border:`1px solid ${C.gray200}`,borderRadius:4,padding:6,background:C.white,maxHeight:110,overflowY:"auto"}}>
+              {ICON_OPTIONS.map(opt=><button key={opt.v} title={opt.l} style={{fontSize:18,padding:"3px 5px",background:ncIcon===opt.v?C.teal100:"transparent",border:`1px solid ${ncIcon===opt.v?C.teal500:"transparent"}`,borderRadius:4,cursor:"pointer",lineHeight:1}} onClick={()=>setNcIcon(opt.v)}>{ICON_MAP[opt.v]}</button>)}
+            </div>
           </div>
         </div>
         <button style={{...S.btn(C.success),width:"100%",marginTop:10}} onClick={()=>{
@@ -1185,15 +1410,15 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
         }}>{"\u2713"} Add Category</button>
       </div>}
       {sortCats(cats).map((c,i)=>{const origIdx=cats.findIndex(x=>x.id===c.id);
-        const iconMap={wrench:"\u{1F527}",megaphone:"\u{1F4E2}",chat:"\u{1F4AC}",chart:"\u{1F4CA}",search:"\u{1F50D}",document:"\u{1F4DD}",money:"\u{1F4B0}",folder:"\u{1F4C1}",key:"\u{1F511}",house:"\u{1F3E0}",handshake:"\u{1F91D}",clipboard:"\u{1F4CB}",phone:"\u{1F4DE}",email:"\u{1F4E7}"};
         const isEd=editCatId===c.id;
         return<div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:`1px solid ${C.gray100}`}}>
-          <span style={{fontSize:16}}>{iconMap[c.icon]||catIcon[c.name]||"\u{1F4C1}"}</span>
+          <span style={{fontSize:20}}>{getIcon(c.icon,c.name)}</span>
           <div style={{flex:1}}>
-            {isEd?<div style={{display:"flex",gap:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={ecName} onChange={e=>setEcName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const u=[...cats];u[origIdx]={...u[origIdx],name:ecName};onUpdateConfig({...config,categories:u});setEditCatId(null);}if(e.key==="Escape")setEditCatId(null);}} autoFocus/><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>{const u=[...cats];u[origIdx]={...u[origIdx],name:ecName};onUpdateConfig({...config,categories:u});setEditCatId(null);}}>{"\u2713"}</button></div>
-            :<div style={{fontSize:13,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditCatId(c.id);setEcName(c.name);}}>{c.name}</div>}
+            {isEd?<div><div style={{display:"flex",gap:4,marginBottom:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={ecName} onChange={e=>setEcName(e.target.value)} onKeyDown={e=>{if(e.key==="Escape")setEditCatId(null);}} autoFocus placeholder="Category name"/><button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"4px 8px",fontSize:12}} onClick={()=>setShowEcIcons(x=>!x)} title="Change icon"><span style={{fontSize:16}}>{ICON_MAP[ecIcon]||"\u{1F4C1}"}</span></button><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>{const u=[...cats];u[origIdx]={...u[origIdx],name:ecName,icon:ecIcon};onUpdateConfig({...config,categories:u});setEditCatId(null);setShowEcIcons(false);}}>{"\u2713"} Save</button></div>{showEcIcons&&<div style={{display:"flex",flexWrap:"wrap",gap:3,padding:6,background:C.white,border:`1px solid ${C.gray200}`,borderRadius:4,maxHeight:90,overflowY:"auto",marginBottom:4}}>{ICON_OPTIONS.map(opt=><button key={opt.v} title={opt.l} style={{fontSize:16,padding:"2px 4px",background:ecIcon===opt.v?C.teal100:"transparent",border:`1px solid ${ecIcon===opt.v?C.teal500:"transparent"}`,borderRadius:3,cursor:"pointer"}} onClick={()=>setEcIcon(opt.v)}>{ICON_MAP[opt.v]}</button>)}</div>}</div>
+            :<div style={{fontSize:13,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditCatId(c.id);setEcName(c.name);setEcIcon(c.icon||"folder");setShowEcIcons(false);}}>{c.name}</div>}
           </div>
           {!isEd&&<div style={{display:"flex",gap:3}}>
+            <button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>{setEditCatId(c.id);setEcName(c.name);setEcIcon(c.icon||"folder");setShowEcIcons(false);}}>Edit</button>
             <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>{
               if(!window.confirm(`Delete "${c.name}" category? Existing tasks with this category won't be affected.`))return;
               onUpdateConfig({...config,categories:cats.filter((_,j)=>j!==origIdx)});
@@ -1282,7 +1507,10 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       <div style={{fontSize:12,color:C.gray400,marginBottom:10}}>Remove tasks that should no longer be in the queue.</div>
       {data.vas.map(va=>{const vq=queue.filter(t=>t.VAEmail?.toLowerCase()===va.Email.toLowerCase());if(!vq.length)return null;
         return<div key={va.Email} style={{marginBottom:10}}><div style={{fontSize:12,fontWeight:600,color:C.teal600,textTransform:"uppercase",marginBottom:4}}>{va.Name} ({vq.length})</div>
-          {vq.map(t=><TaskRow key={t._localId} task={t} onDelete={onDeleteTask}/>)}</div>;})}
+          {groupTasks(vq).map((item,i)=>item.type==="single"
+            ?<TaskRow key={item.task._localId} task={item.task} onDelete={onDeleteTask} onComplete={onCompleteSubTask}/>
+            :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onDelete={onDeleteTask} onCompleteSubTask={onCompleteSubTask} showVA={false}/>
+          )}</div>;})}
     </div>}
 
     {/* Close Day */}
