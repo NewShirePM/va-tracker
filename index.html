@@ -37,7 +37,7 @@ const CONFIG = {
 };
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE = `${GRAPH}/sites/${CONFIG.siteId}`;
-const SCOPES = ["Sites.ReadWrite.All", "User.Read"];
+const SCOPES = ["Sites.ReadWrite.All", "User.Read", "User.Invite.All"];
 
 // ============================================================
 // ROLE DETECTION
@@ -62,6 +62,7 @@ const C = {
   gold700:"#9E7B2F",gold600:"#B8922E",gold500:"#CDA04B",gold400:"#D4AF61",gold100:"#F8F0DB",gold50:"#FFFBF0",
   white:"#FFFFFF",pageBg:"#F7F8F7",gray100:"#E8EAEA",gray200:"#D0D8DC",gray300:"#A8B0B0",gray400:"#7A8585",gray600:"#3E4A4A",dark:"#1A2A30",
   success:"#2D8A5A",successBg:"rgba(45,138,90,0.08)",error:"#C44B3B",errorBg:"rgba(196,75,59,0.06)",
+  purple:"#6B54A0",purpleBg:"rgba(107,84,160,0.08)",purpleLight:"#EEE8FA",
   warning:"#D4960A",warningBg:"rgba(212,150,10,0.08)",info:"#4A78B0",infoBg:"rgba(74,120,176,0.08)",
 };
 const font="'Source Sans 3','Segoe UI',-apple-system,sans-serif";
@@ -98,7 +99,7 @@ const S={
 // ============================================================
 // COMPONENTS
 // ============================================================
-const badgeC={success:{c:C.success,b:C.successBg},error:{c:C.error,b:C.errorBg},warning:{c:C.warning,b:C.warningBg},info:{c:C.info,b:C.infoBg},neutral:{c:C.gray400,b:C.gray100}};
+const badgeC={success:{c:C.success,b:C.successBg},error:{c:C.error,b:C.errorBg},warning:{c:C.warning,b:C.warningBg},info:{c:C.info,b:C.infoBg},neutral:{c:C.gray400,b:C.gray100},purple:{c:C.purple,b:C.purpleBg}};
 function Badge({type="neutral",children}){const m=badgeC[type]||badgeC.neutral;return<span style={{display:"inline-flex",padding:"2px 8px",fontSize:11,fontWeight:600,borderRadius:99,textTransform:"uppercase",letterSpacing:"0.03em",color:m.c,background:m.b}}>{children}</span>;}
 function KPI({label,value,color,sub}){return<div style={S.kpi}><div style={S.kpiL}>{label}</div><div style={{...S.kpiV,color:color||C.teal700}}>{value}</div>{sub&&<div style={{fontSize:10,color:C.gray400,marginTop:2}}>{sub}</div>}</div>;}
 
@@ -127,27 +128,30 @@ async function gAll(token,url){let a=[],n=url;while(n){const d=await gGet(token,
 async function gPost(token,url,fields){const r=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify({fields})});if(!r.ok)throw new Error(`POST ${r.status}`);return r.json();}
 async function gPatch(token,url,fields){const r=await fetch(url,{method:"PATCH",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(fields)});if(!r.ok)throw new Error(`PATCH ${r.status}`);return r.json();}
 function lUrl(n){return`${SITE}/lists/${n}/items`;}
+async function gRawPost(token,url,body){const r=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(body)});if(!r.ok){const t=await r.text();throw new Error(`POST ${r.status}: ${t}`);}return r.json();}
 function iUrl(n,id){return`${SITE}/lists/${n}/items/${id}/fields`;}
 
 async function safeGet(token,name,url){try{console.log(`[VT] Loading ${name}...`);const r=await gAll(token,url);console.log(`[VT] ${name}: ${r.length}`);return r;}catch(e){console.warn(`[VT] ${name} failed: ${e.message}`);return[];}}
 
 async function loadAll(token){
-  const[eR,cR,pR,ptR,aR]=await Promise.all([
+  const[eR,cR,pR,ptR,aR,gR]=await Promise.all([
     safeGet(token,"Employees",`${lUrl("Employees")}?expand=fields&$top=200`),
     safeGet(token,"Config",`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
     safeGet(token,"Properties",`${lUrl("VA_Properties")}?expand=fields&$top=200`),
     safeGet(token,"Portfolios",`${lUrl("VA_Portfolios")}?expand=fields&$top=200`),
     safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=200`),
+    safeGet(token,"Guests",`${lUrl("VA_Guests")}?expand=fields&$top=200`),
   ]);
   const employees=eR.map(e=>({id:e.id,...e.fields}));
   const config=cR.length>0?JSON.parse(cR[0].fields.ConfigJSON||"{}"):{}; 
   const properties=pR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
   const portfolios=ptR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
   const activities=aR.map(a=>({id:a.id,...a.fields}));
+  const guests=gR.map(g=>({id:g.id,...g.fields})).filter(g=>g.IsActive!==false);
   const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant"&&e.EmployeeActive!==false);
   const pms=employees.filter(e=>e.JobTitle==="Property Manager"&&e.EmployeeActive!==false);
-  console.log("[VT] Loaded:",{emp:employees.length,props:properties.length,port:portfolios.length,act:activities.length,vas:vas.length,pms:pms.length});
-  return{employees,config,properties,portfolios,activities,vas,pms};
+  console.log("[VT] Loaded:",{emp:employees.length,props:properties.length,port:portfolios.length,act:activities.length,vas:vas.length,pms:pms.length,guests:guests.length});
+  return{employees,config,properties,portfolios,activities,vas,pms,guests};
 }
 
 // ============================================================
@@ -193,6 +197,8 @@ function App(){
   async function gT(){return(await refresh())||token;}
 
   // Load data
+  const[myGuest,setMyGuest]=useState(null);
+
   useEffect(()=>{
     if(!token||!acct)return;
     const email=acct.username.toLowerCase();
@@ -200,10 +206,24 @@ function App(){
     setMyEmail(email);setLoading(true);
     loadAll(token).then(d=>{
       setData(d);
+      // Priority 1: check Employees
       const me=d.employees.find(e=>(e.Email&&e.Email.toLowerCase()===email)||(e.M365UserId&&e.M365UserId.toLowerCase()===email)||(e.Email&&email.split("@")[0]===e.Email.toLowerCase().split("@")[0]));
-      console.log("[VT] Match:",me?`${me.Name} ${me.JobTitle} role=${me.VATrackerRole||"auto"}`:"NOT FOUND");
-      if(!me){setRole(null);setError("access_denied");}
-      else{const r=detectRole(me);if(!r){setRole(null);setError("access_denied");}else{setRole(r);setError(null);setMyEmp(me);}}
+      if(me){
+        const r=detectRole(me);
+        if(r){setRole(r);setError(null);setMyEmp(me);}
+        else{
+          // Priority 2: check guests even if in Employees but no role
+          const gRec=d.guests.find(g=>g.GuestEmail&&g.GuestEmail.toLowerCase()===email);
+          if(gRec){setRole("guest");setMyGuest(gRec);setError(null);}
+          else{setRole(null);setError("access_denied");}
+        }
+      } else {
+        // Priority 2: check VA_Guests
+        const gRec=d.guests.find(g=>g.GuestEmail&&g.GuestEmail.toLowerCase()===email);
+        console.log("[VT] Guest check:",gRec?`${gRec.GuestName} @ ${gRec.Company}`:"NOT FOUND");
+        if(gRec){setRole("guest");setMyGuest(gRec);setError(null);}
+        else{setRole(null);setError("access_denied");}
+      }
       buildQueue(d,email);
       setLoading(false);
     }).catch(e=>{console.error("[VT] Load error:",e);setError("load_error: "+e.message);setLoading(false);});
@@ -220,9 +240,11 @@ function App(){
       else{q.push(t);}
     });
 
-    // 2. Generate recurring daily tasks that don't already exist
+    // 2. Generate recurring daily/weekly tasks that don't already exist
     if(d.config.recurringTasks){
       const td=today();
+      const todayDate=new Date(td);
+      const todayDow=todayDate.getDay(); // 0=Sun,1=Mon,...6=Sat
       // Check what's already in SharePoint for today (any status)
       const todayTasks=d.activities.filter(a=>a.ActivityType==="Task"&&a.ActivityDate&&a.ActivityDate.slice(0,10)===td);
       const existing=new Set(todayTasks.map(t=>`${t.VAEmail}|${t.Title}`));
@@ -232,13 +254,21 @@ function App(){
       const toSave=[];
       d.config.recurringTasks.forEach(rt=>{
         if(!rt.active)return;
+        // Frequency check
+        const freq=rt.frequency||"daily";
+        if(freq==="weekly"){
+          // rt.dayOfWeek: 0=Sun...6=Sat, default Monday(1)
+          const targetDow=rt.dayOfWeek!==undefined?rt.dayOfWeek:1;
+          if(todayDow!==targetDow)return; // Not today
+        }
         const key=`${rt.vaEmail}|${rt.description}`;
         if(existing.has(key))return;
         const va=d.vas.find(v=>v.Email&&v.Email.toLowerCase()===rt.vaEmail.toLowerCase());
         if(!va)return;
         const prop=rt.propertyId?d.properties.find(p=>p.Title===rt.propertyId):null;
         const cat=d.config.categories?.find(c=>c.id===rt.category);
-        const task={Title:rt.description,VAEmail:va.Email,VAName:va.Name,PropertyId:rt.propertyId||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Source:"Daily",Status:"Queued",Priority:"Normal",ActivityDate:td,ActivityType:"Task"};
+        const src=freq==="weekly"?"Weekly":"Daily";
+        const task={Title:rt.description,VAEmail:va.Email,VAName:va.Name,PropertyId:rt.propertyId||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Source:src,Status:"Queued",Priority:"Normal",ActivityDate:td,ActivityType:"Task"};
         if(va.VATrackerStatus==="Out"){task.Source="Coverage";task.CoverageForEmail=va.Email;task.CoverageForName=va.Name;}
         toSave.push(task);
       });
@@ -473,6 +503,35 @@ function App(){
     try{const t=await gT();await gPatch(t,iUrl("VA_Portfolios",portId),{IsActive:false});await reload();fl(`${propName} removed from ${vaName}`);}catch(e){fl("Error: "+e.message);}
   }
 
+  // ── Guest management ──
+  async function addGuest({name,email,company,vaEmails}){
+    try{
+      const t=await gT();
+      // Send Azure B2B invite
+      try{
+        await gRawPost(t,"https://graph.microsoft.com/v1.0/invitations",{
+          invitedUserEmailAddress:email,
+          inviteRedirectUrl:"https://newshirepm.github.io/va-tracker/",
+          sendInvitationMessage:true,
+          invitedUserDisplayName:name
+        });
+        console.log("[VT] B2B invite sent to",email);
+      }catch(invErr){
+        console.warn("[VT] B2B invite failed (may need User.Invite.All permission):",invErr.message);
+        // Continue to create the record even if invite fails
+      }
+      await gPost(t,lUrl("VA_Guests"),{Title:`Guest-${Date.now()}`,GuestName:name,GuestEmail:email.toLowerCase(),Company:company||"",VAEmails:vaEmails.join(","),IsActive:true,InvitedDate:new Date().toISOString(),InvitedBy:acct?.name||myEmail});
+      await reload();fl(`${name} invited!`);
+    }catch(e){fl("Error inviting guest: "+e.message);}
+  }
+  async function updateGuest(id,fields){
+    try{const t=await gT();await gPatch(t,iUrl("VA_Guests",id),fields);await reload();fl("Guest updated!");}catch(e){fl("Error: "+e.message);}
+  }
+  async function deactivateGuest(id,name){
+    if(!window.confirm(`Revoke access for ${name}?`))return;
+    try{const t=await gT();await gPatch(t,iUrl("VA_Guests",id),{IsActive:false});await reload();fl(`${name} access revoked`);}catch(e){fl("Error: "+e.message);}
+  }
+
   // ── Property CRUD ──
   async function addProperty(p){
     try{const t=await gT();await gPost(t,lUrl("VA_Properties"),{Title:`PROP-${String(data.properties.length+1).padStart(3,"0")}`,PropertyName:p.name,PropertyGroup:p.group,Units:p.units,PMEmail:p.pmEmail,PMName:p.pmName,AppFolioId:p.appFolioId||"",IsActive:true});
@@ -504,6 +563,7 @@ function App(){
   const isAdmin=role==="admin";
   const isMgr=role==="admin"||role==="manager";
   const isVA=role==="va";
+  const isGuest=role==="guest";
   const myVa=data?.vas.find(v=>v.Email&&v.Email.toLowerCase()===myEmail);
   const myPort=data?data.portfolios.filter(p=>p.VAEmail&&p.VAEmail.toLowerCase()===myEmail):[];
   const myProps=data?myPort.map(p=>data.properties.find(pr=>pr.Title===p.PropertyId)).filter(Boolean):[];
@@ -511,6 +571,9 @@ function App(){
   const myQ=queue.filter(t=>isVA?t.VAEmail.toLowerCase()===myEmail:true);
   const myTm=timers.filter(t=>isVA?t.VAEmail.toLowerCase()===myEmail:true);
   const outVAs=data?data.vas.filter(v=>v.VATrackerStatus==="Out"):[];
+  // Guest computed
+  const guestVAEmails=isGuest&&myGuest?.VAEmails?myGuest.VAEmails.split(",").map(e=>e.trim().toLowerCase()).filter(Boolean):[];
+  const guestVAs=isGuest?data?.vas.filter(v=>guestVAEmails.includes(v.Email?.toLowerCase()))||[]:null;
 
   // ============================================================
   // RENDER: Auth screens
@@ -523,13 +586,20 @@ function App(){
   // TABS
   // ============================================================
   const TABS=[];
-  if(isMgr)TABS.push({n:"Dashboard",k:isAdmin?"dash":"mdash"});
-  if(isVA||isAdmin)TABS.push({n:`My Tasks${myQ.length?` (${myQ.length})`:""}`,k:"tasks"});
-  if(isVA||isAdmin)TABS.push({n:`Active${(isAdmin?timers.length:myTm.length)?` (${isAdmin?timers.length:myTm.length})`:""}`,k:"active"});
-  if(role==="manager"||isAdmin)TABS.push({n:`My Properties${mgrProps.length?` (${mgrProps.length})`:isAdmin?" (All)":""}`,k:"mprops"});
-  TABS.push({n:"History",k:"history"});
-  TABS.push({n:"Scorecard",k:"score"});
-  if(isAdmin)TABS.push({n:"Admin",k:"admin"});
+  if(isGuest){
+    TABS.push({n:"Dashboard",k:"gdash"});
+    TABS.push({n:`Active${timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase())).length?` (${timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase())).length})`:""}`,k:"gactive"});
+    TABS.push({n:"History",k:"history"});
+    TABS.push({n:"Scorecard",k:"score"});
+  } else {
+    if(isMgr)TABS.push({n:"Dashboard",k:isAdmin?"dash":"mdash"});
+    if(isVA||isAdmin)TABS.push({n:`My Tasks${myQ.length?` (${myQ.length})`:""}`,k:"tasks"});
+    if(isVA||isAdmin)TABS.push({n:`Active${(isAdmin?timers.length:myTm.length)?` (${isAdmin?timers.length:myTm.length})`:""}`,k:"active"});
+    if(role==="manager"||isAdmin)TABS.push({n:`My Properties${mgrProps.length?` (${mgrProps.length})`:isAdmin?" (All)":""}`,k:"mprops"});
+    TABS.push({n:"History",k:"history"});
+    TABS.push({n:"Scorecard",k:"score"});
+    if(isAdmin)TABS.push({n:"Admin",k:"admin"});
+  }
   const ck=TABS[tab]?.k||TABS[0]?.k;
 
   // ============================================================
@@ -541,26 +611,26 @@ function App(){
       <div style={S.header}>
         <div><div style={S.headerTitle}>{CONFIG.appName}</div><div style={S.headerSub}>NewShire Property Management</div></div>
         <div style={S.headerUser}>
-          <div style={{fontWeight:600}}>{acct.name||myEmail}</div>
-          <div style={{fontSize:11,color:C.gold500,textTransform:"uppercase"}}>{role}{role==="manager"?` · ${mgrProps.length} properties`:""}</div>
+          <div style={{fontWeight:600}}>{isGuest?myGuest?.GuestName:acct.name||myEmail}</div>
+          <div style={{fontSize:11,color:isGuest?C.purple:C.gold500,textTransform:"uppercase"}}>{isGuest?`Guest${myGuest?.Company?` · ${myGuest.Company}`:""}${guestVAs?` · ${guestVAs.length} VAs`:""}`:role+( role==="manager"?` · ${mgrProps.length} properties`:"")}</div>
           <div style={{display:"flex",gap:4,justifyContent:"flex-end",marginTop:2}}>
-            {timers.length>0&&<Badge type="success">{timers.length} timing</Badge>}
-            {covQ.length>0&&<Badge type="warning">{covQ.length} coverage</Badge>}
-            {outVAs.length>0&&<Badge type="error">{outVAs.length} out</Badge>}
+            {isGuest?<Badge type="purple">Read-Only</Badge>:<>{timers.length>0&&<Badge type="success">{timers.length} timing</Badge>}{covQ.length>0&&<Badge type="warning">{covQ.length} coverage</Badge>}{outVAs.length>0&&<Badge type="error">{outVAs.length} out</Badge>}</>}
           </div>
         </div>
       </div>
       <div style={S.tabBar}>{TABS.map((t,i)=><button key={t.k} style={S.tab(tab===i)} onClick={()=>setTab(i)}>{t.n}</button>)}</div>
       {flash&&<div style={{background:C.gold50,borderBottom:`1px solid ${C.gold500}`,padding:"8px 20px",fontSize:13,fontWeight:600,color:C.gold700,textAlign:"center"}}>{flash}</div>}
       <div style={S.content}>
+        {ck==="gdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null} filterVAs={guestVAs} isGuest={true}/>}
+        {ck==="gactive"&&<ActiveView timers={timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase()))} tick={tick} isMgr={true} readOnly={true} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
         {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
         {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} config={data?.config}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
-        {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
-        {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} generateReport={generateWeeklyReport}/>}
+        {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} guestVAEmails={guestVAEmails}/>}
+        {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest}/>}
       </div>
     </div>
   );
@@ -569,20 +639,21 @@ function App(){
 // ============================================================
 // DASHBOARD — shared by Admin (all) and Manager (filtered)
 // ============================================================
-function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,filterProps}){
+function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,filterProps,filterVAs,isGuest}){
   if(!data)return null;
   // Filter activities by date range and optionally by properties
   const propIds=filterProps?new Set(filterProps.map(p=>p.Title)):null;
-  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!propIds||propIds.has(a.PropertyId)));
+  const vaEmailSet=filterVAs?new Set(filterVAs.map(v=>v.Email?.toLowerCase())):null;
+  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!propIds||propIds.has(a.PropertyId))&&(!vaEmailSet||vaEmailSet.has(a.VAEmail?.toLowerCase())));
   const done=tasks.filter(a=>a.Status==="Completed");
   const blocked=tasks.filter(a=>a.Status==="Blocked");
   const inc=tasks.filter(a=>a.Status==="Incomplete");
-  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!propIds||true));
+  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!vaEmailSet||vaEmailSet.has(a.VAEmail?.toLowerCase())));
   const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0);
   const taskMin=done.reduce((s,a)=>s+(a.DurationMin||0),0);
   const rate=tasks.length?Math.round(done.length/tasks.length*100):0;
   const util=shiftMin>0?Math.round(taskMin/shiftMin*100):0;
-  const filteredVAs=propIds?data.vas.filter(v=>data.portfolios.some(p=>propIds.has(p.PropertyId)&&p.VAEmail?.toLowerCase()===v.Email.toLowerCase())):data.vas;
+  const filteredVAs=filterVAs||( propIds?data.vas.filter(v=>data.portfolios.some(p=>propIds.has(p.PropertyId)&&p.VAEmail?.toLowerCase()===v.Email.toLowerCase())):data.vas);
 
   return(
     <div>
@@ -597,15 +668,16 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
       </div>
 
       {/* KPIs */}
+      {isGuest&&<div style={{background:C.purpleBg,border:`1px solid ${C.purple}`,borderRadius:6,padding:"8px 14px",marginBottom:12,fontSize:12,color:C.purple,display:"flex",alignItems:"center",gap:8}}><span>👁️</span><span>Read-only view — showing data for: <strong>{filteredVAs.map(v=>v.Name).join(", ")}</strong></span></div>}
       <div style={{...S.row,marginBottom:16}}>
         <KPI label="Tasks" value={tasks.length}/>
         <KPI label="Done" value={done.length} color={C.success}/>
         <KPI label="Rate" value={`${rate}%`} color={rate>=85?C.success:rate>=60?C.warning:tasks.length?C.error:C.teal700}/>
-        {!filterProps&&<KPI label="Shift Hrs" value={fM(shiftMin)}/>}
-        {!filterProps&&<KPI label="Utilization" value={`${util}%`} color={util>=75?C.success:util>=50?C.warning:shiftMin>0?C.error:C.teal700}/>}
+        {!filterProps&&!isGuest&&<KPI label="Shift Hrs" value={fM(shiftMin)}/>}
+        {!filterProps&&!isGuest&&<KPI label="Utilization" value={`${util}%`} color={util>=75?C.success:util>=50?C.warning:shiftMin>0?C.error:C.teal700}/>}
         <KPI label="Blocked" value={blocked.length} color={blocked.length>0?C.error:C.success}/>
-        <KPI label="Coverage" value={covQ.length} color={covQ.length>0?C.warning:C.success}/>
-        {!filterProps&&<KPI label="VAs Out" value={data.vas.filter(v=>v.VATrackerStatus==="Out").length} color={data.vas.filter(v=>v.VATrackerStatus==="Out").length>0?C.warning:C.teal700}/>}
+        {!isGuest&&<KPI label="Coverage" value={covQ.length} color={covQ.length>0?C.warning:C.success}/>}
+        {!filterProps&&!isGuest&&<KPI label="VAs Out" value={data.vas.filter(v=>v.VATrackerStatus==="Out").length} color={data.vas.filter(v=>v.VATrackerStatus==="Out").length>0?C.warning:C.teal700}/>}
       </div>
 
       {/* Needs Attention */}
@@ -759,20 +831,20 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
 // ============================================================
 // ACTIVE VIEW
 // ============================================================
-function ActiveView({timers:tms,tick,isMgr,onPause,onResume,onFinish,onCancel}){
-  if(!tms.length)return(<div style={{...S.card,textAlign:"center",padding:50}}><div style={{fontSize:36,marginBottom:10}}>{"\u23F1"}</div><div style={{fontSize:17,fontWeight:600,color:C.teal700}}>No Active Timers</div><div style={{fontSize:13,color:C.gray400}}>Start a task to begin tracking.</div></div>);
+function ActiveView({timers:tms,tick,isMgr,readOnly,onPause,onResume,onFinish,onCancel}){
+  if(!tms.length)return(<div style={{...S.card,textAlign:"center",padding:50}}><div style={{fontSize:36,marginBottom:10}}>{"\u23F1"}</div><div style={{fontSize:17,fontWeight:600,color:C.teal700}}>{readOnly?"No VAs Currently Working":"No Active Timers"}</div><div style={{fontSize:13,color:C.gray400}}>{readOnly?"Check back later to see live task progress.":"Start a task to begin tracking."}</div></div>);
   return(<div>{tms.map(t=>{const now=Date.now(),st=new Date(t.StartTime).getTime();let pMs=t._pMs||0;const ip=!!t._pS;if(ip)pMs+=(now-t._pS);const el=ip?Math.floor((t._pS-st-(t._pMs||0))/1000):Math.floor((now-st-pMs)/1000);
     return(<div key={t._localId} style={{...S.card,borderLeft:`4px solid ${ip?C.warning:C.success}`,padding:0,overflow:"hidden"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",background:ip?C.warningBg:C.successBg}}>
         <div><div style={{fontSize:12,fontWeight:600,color:ip?C.warning:C.success,textTransform:"uppercase"}}>{ip?"\u23F8 Paused":"\u25CF Recording"}</div><div style={{fontSize:11,color:C.gray400,marginTop:2}}>{fT(t.StartTime)} · <Badge type={srcBadge[t.Source]||"neutral"}>{t.Source}</Badge>{isMgr&&` · ${t.VAName}`}</div></div>
         <div style={{fontSize:26,fontWeight:700,fontFamily:mono,color:ip?C.warning:C.teal700}}>{fTm(el)}</div></div>
       <div style={{padding:"12px 16px"}}><div style={{fontSize:14,fontWeight:600,color:C.teal700,marginBottom:3}}>{t.Title}</div><div style={{fontSize:12,color:C.gray400}}>{"\u{1F3E0}"} {t.PropertyName} · {catIcon[t.Category]||""} {t.Category}</div>{t.CoverageForName&&<div style={{fontSize:11,color:C.warning,marginTop:2}}>{"\u{1F504}"} Covering for {t.CoverageForName}</div>}</div>
-      <div style={{display:"flex",gap:6,padding:"0 16px 12px",flexWrap:"wrap"}}>
+      {!readOnly&&<div style={{display:"flex",gap:6,padding:"0 16px 12px",flexWrap:"wrap"}}>
         {ip?<button style={{...S.btn(C.success),flex:1}} onClick={()=>onResume(t._localId)}>{"\u25B6"} Resume</button>:<button style={{...S.btnO(C.warning,C.warning),flex:1}} onClick={()=>onPause(t._localId)}>{"\u23F8"} Pause</button>}
         <button style={{...S.btn(C.success),flex:1}} onClick={()=>{const n=prompt("Notes (optional):");onFinish(t._localId,"Completed",n||"");}}>{"\u2713"} Done</button>
         <button style={{...S.btnO(C.error,C.error),padding:"9px 12px"}} onClick={()=>{const n=prompt("What's blocking?");if(n)onFinish(t._localId,"Blocked",n);}}>{"\u26A0"}</button>
         <button style={{...S.btnO(C.gray400,C.gray200),padding:"9px 12px"}} onClick={()=>onCancel(t._localId)}>{"\u21A9"}</button>
-      </div></div>);})}</div>);
+      </div>}</div>);})}</div>);
 }
 
 // ============================================================
@@ -861,15 +933,18 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
 // ============================================================
 // HISTORY VIEW
 // ============================================================
-function HistoryView({data,role,myEmail,isMgr,mgrProps}){
+function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails}){
   const[view,setView]=useState("tasks");
   if(!data)return null;
+  const isGuest=role==="guest";
   const propFilter=role==="manager"?new Set(mgrProps.map(p=>p.Title)):null;
-  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status!=="Queued"&&a.Status!=="In Progress"&&(isMgr?(propFilter?propFilter.has(a.PropertyId):true):a.VAEmail?.toLowerCase()===myEmail)).slice(0,50);
+  const gSet=guestVAEmails?.length>0?new Set(guestVAEmails):null;
+  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status!=="Queued"&&a.Status!=="In Progress"&&(isGuest?(gSet?gSet.has(a.VAEmail?.toLowerCase()):false):(isMgr?(propFilter?propFilter.has(a.PropertyId):true):a.VAEmail?.toLowerCase()===myEmail))).slice(0,50);
   const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&(role==="admin"||a.VAEmail?.toLowerCase()===myEmail)).slice(0,30);
 
   return(<div>
-    <div style={{display:"flex",gap:8,marginBottom:12}}><button style={view==="tasks"?S.btn(C.headerBg):S.btnO(C.teal700,C.teal100)} onClick={()=>setView("tasks")}>Tasks</button>{role!=="manager"&&<button style={view==="shifts"?S.btn(C.headerBg):S.btnO(C.teal700,C.teal100)} onClick={()=>setView("shifts")}>Shifts</button>}</div>
+    {isGuest&&<div style={{background:C.purpleBg,border:`1px solid ${C.purple}`,borderRadius:6,padding:"8px 14px",marginBottom:12,fontSize:12,color:C.purple}}>👁️ Read-only — task history for your assigned VAs</div>}
+    <div style={{display:"flex",gap:8,marginBottom:12}}><button style={view==="tasks"?S.btn(C.headerBg):S.btnO(C.teal700,C.teal100)} onClick={()=>setView("tasks")}>Tasks</button>{role!=="manager"&&!isGuest&&<button style={view==="shifts"?S.btn(C.headerBg):S.btnO(C.teal700,C.teal100)} onClick={()=>setView("shifts")}>Shifts</button>}</div>
     {view==="tasks"&&<div style={{...S.card,overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Date","VA","Task","Property","Source","Duration","Status"].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>
       {tasks.map((t,i)=><tr key={i}><td style={{...S.td,whiteSpace:"nowrap"}}>{fD(t.ActivityDate)}</td><td style={{...S.td,fontWeight:500,fontSize:12}}>{t.VAName}</td><td style={{...S.td,maxWidth:200}}>{t.Title}{t.CoverageForName&&<div style={{fontSize:10,color:C.warning}}>{"\u{1F504}"} coverage for {t.CoverageForName}</div>}{t.Notes&&<div style={{fontSize:11,color:C.gray400}}>{"\u{1F4AC}"} {t.Notes}</div>}</td><td style={{...S.td,fontSize:12}}>{t.PropertyName}</td><td style={S.td}><Badge type={srcBadge[t.Source]||"neutral"}>{t.Source}</Badge></td><td style={{...S.td,fontFamily:mono,fontWeight:600,fontSize:12}}>{t.DurationMin?fM(t.DurationMin):"\u2014"}</td><td style={S.td}><Badge type={stBadge[t.Status]||"neutral"}>{t.Status}</Badge></td></tr>)}
     </tbody></table>{!tasks.length&&<div style={{textAlign:"center",padding:40,color:C.gray400}}>No history.</div>}</div>}
@@ -882,10 +957,13 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps}){
 // ============================================================
 // SCORECARD VIEW
 // ============================================================
-function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps}){
+function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps,guestVAs}){
   const[selVa,setSelVa]=useState(myEmail);
   if(!data)return null;
-  const viewableVAs=role==="manager"?data.vas.filter(v=>data.portfolios.some(p=>mgrProps.some(mp=>mp.Title===p.PropertyId)&&p.VAEmail?.toLowerCase()===v.Email.toLowerCase())):data.vas;
+  const isGuest=role==="guest";
+  const viewableVAs=guestVAs||(role==="manager"?data.vas.filter(v=>data.portfolios.some(p=>mgrProps.some(mp=>mp.Title===p.PropertyId)&&p.VAEmail?.toLowerCase()===v.Email.toLowerCase())):data.vas);
+  // Auto-select first VA for guests
+  React.useEffect(()=>{if(isGuest&&viewableVAs.length>0&&!viewableVAs.find(v=>v.Email?.toLowerCase()===selVa))setSelVa(viewableVAs[0].Email?.toLowerCase()||"");},[isGuest]);
   const va=data.vas.find(v=>v.Email?.toLowerCase()===(isMgr?selVa:myEmail)?.toLowerCase())||myVa;
   const vaEmail=va?.Email?.toLowerCase()||myEmail;
   const per=7;
@@ -901,7 +979,7 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps}){
   const catList=Object.entries(catMap).sort((a,b)=>b[1].m-a[1].m);
 
   return(<div>
-    {isMgr&&<div style={{...S.card,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}><div style={{flex:1,minWidth:200}}><label style={S.label}>VA</label><select style={S.select} value={selVa} onChange={e=>setSelVa(e.target.value)}>{viewableVAs.map(v=><option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}{v.VATrackerStatus==="Out"?" [OUT]":""}</option>)}</select></div></div>}
+    {(isMgr||isGuest)&&<div style={{...S.card,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>{isGuest&&<span style={{fontSize:12,color:C.purple,display:"flex",alignItems:"center",gap:4}}>👁️ Read-only scorecard</span>}<div style={{flex:1,minWidth:200}}><label style={S.label}>VA</label><select style={S.select} value={selVa} onChange={e=>setSelVa(e.target.value)}>{viewableVAs.map(v=><option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}{v.VATrackerStatus==="Out"?" [OUT]":""}</option>)}</select></div></div>}
     {!isMgr&&va&&<div style={{marginBottom:12}}><div style={{fontSize:18,fontWeight:700,color:C.teal700}}>{va.Name}</div><div style={{fontSize:12,color:C.gray400}}>{vaPropsL.length} properties · {vaPropsL.reduce((s,p)=>s+(p.Units||0),0)} units</div></div>}
     <div style={{...S.row,marginBottom:16}}>{[{l:"Tasks",v:tasks.length},{l:"Done",v:done.length,c:C.success},{l:"Rate",v:`${rate}%`,c:rate>=85?C.success:undefined},{l:"Shift",v:fM(shiftMin)},{l:"Util",v:`${util}%`,c:util>=75?C.success:util<50&&shiftMin>0?C.error:undefined},{l:"Gap",v:fM(gap),c:gap>120?C.error:undefined},{l:"Coverage",v:cov.length,c:cov.length>0?C.warning:undefined}].map((k,i)=><KPI key={i} label={k.l} value={k.v} color={k.c}/>)}</div>
     {shiftMin>0&&<div style={{...S.card,padding:14}}><div style={{fontSize:13,fontWeight:600,color:C.teal700,marginBottom:8}}>Time Breakdown</div><div style={{display:"flex",height:22,borderRadius:4,overflow:"hidden",background:C.gray100}}><div style={{width:`${Math.min(util,100)}%`,background:C.success,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,color:"#FFF"}}>{util>14?`${util}%`:""}</div>{breakMin>0&&<div style={{width:`${Math.min(Math.round(breakMin/(shiftMin+breakMin)*100),40)}%`,background:C.warning}}/>}<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:C.gray400}}>{gap>0?`${fM(gap)} gap`:""}</div></div></div>}
@@ -916,7 +994,7 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps}){
 // ============================================================
 // ADMIN VIEW
 // ============================================================
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,generateReport}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest}){
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
@@ -929,13 +1007,22 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
 
   if(!data)return null;
   const cats=config?.categories||[];const rTasks=config?.recurringTasks||[];
+  const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
   // Get properties for a specific VA
   function vaProps(email){if(!email)return data.properties;return data.properties.filter(p=>data.portfolios.some(pt=>pt.VAEmail?.toLowerCase()===email.toLowerCase()&&pt.PropertyId===p.Title));}
   const sCats=sortCats(cats);
+
+  // ── saveRec / toggleRec / deleteRec / saveEdit (were missing) ──
+  function saveRec(newList){onUpdateConfig({...config,recurringTasks:newList});}
+  function toggleRec(i){const u=[...rTasks];u[i]={...u[i],active:!u[i].active};saveRec(u);}
+  function deleteRec(i){if(!window.confirm("Delete this recurring task?"))return;saveRec(rTasks.filter((_,j)=>j!==i));}
+  function saveEdit(i){const u=[...rTasks];u[i]={...u[i],description:editDesc};saveRec(u);setEditIdx(null);}
+
   // Multi-property state for assign
   const[aProps,setAProps]=useState([]);
   function toggleAProp(id){setAProps(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);}
+  function selectAllAProps(){const ps=vaProps(aVa);setAProps(ps.map(p=>p.Title));}
 
   function handleAssign(){if(!aVa||!aCat||!aDesc)return;const va=data.vas.find(v=>v.Email===aVa);const cat=cats.find(c=>c.id===aCat);
     const propList=aProps.length>0?aProps:[""];// empty string = General
@@ -944,17 +1031,30 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
     });
     setADesc("");setAVa("");setACat("");setAProps([]);setAPri("Normal");setANotes("");setShowAssign(false);}
 
-  // Multi-property for recurring
+  // Multi-property + weekly for recurring
   const[rProps,setRProps]=useState([]);
+  const[rFreq,setRFreq]=useState("daily");
+  const[rDay,setRDay]=useState(1); // Monday default
   function toggleRProp(id){setRProps(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);}
+  function selectAllRProps(){const ps=vaProps(rVa);setRProps(ps.map(p=>p.Title));}
 
   function addRec(){if(!rVa||!rCat||!rDesc)return;
     const propList=rProps.length>0?rProps:[""];
-    const newTasks=propList.map(pid=>({vaEmail:rVa,category:rCat,description:rDesc,propertyId:pid,active:true}));
-    saveRec([...rTasks,...newTasks]);setRDesc("");setRVa("");setRCat("");setRProps([]);setShowRec(false);}
+    const newTasks=propList.map(pid=>({vaEmail:rVa,category:rCat,description:rDesc,propertyId:pid,active:true,frequency:rFreq,dayOfWeek:rFreq==="weekly"?rDay:undefined}));
+    saveRec([...rTasks,...newTasks]);setRDesc("");setRVa("");setRCat("");setRProps([]);setRFreq("daily");setRDay(1);setShowRec(false);}
 
   // Duplicate recurring task for different VA
-  function duplicateRec(i){const r=rTasks[i];setRVa("");setRCat(r.category);setRDesc(r.description);setRProps(r.propertyId?[r.propertyId]:[]);setShowRec(true);}
+  function duplicateRec(i){const r=rTasks[i];setRVa("");setRCat(r.category);setRDesc(r.description);setRProps(r.propertyId?[r.propertyId]:[]);setRFreq(r.frequency||"daily");setRDay(r.dayOfWeek!==undefined?r.dayOfWeek:1);setShowRec(true);}
+
+  // Guest management state
+  const[showAddGuest,setShowAddGuest]=useState(false);
+  const[gName,setGName]=useState("");const[gEmail,setGEmail]=useState("");const[gCompany,setGCompany]=useState("");const[gVAs,setGVAs]=useState([]);
+  const[editGuestId,setEditGuestId]=useState(null);const[egName,setEgName]=useState("");const[egCompany,setEgCompany]=useState("");const[egVAs,setEgVAs]=useState([]);
+  function toggleGVA(email){setGVAs(p=>p.includes(email)?p.filter(x=>x!==email):[...p,email]);}
+  function toggleEGVA(email){setEgVAs(p=>p.includes(email)?p.filter(x=>x!==email):[...p,email]);}
+  function handleAddGuest(){if(!gName||!gEmail||!gVAs.length)return;onAddGuest({name:gName,email:gEmail,company:gCompany,vaEmails:gVAs});setGName("");setGEmail("");setGCompany("");setGVAs([]);setShowAddGuest(false);}
+  function startEditGuest(g){setEditGuestId(g.id);setEgName(g.GuestName||"");setEgCompany(g.Company||"");setEgVAs((g.VAEmails||"").split(",").map(e=>e.trim()).filter(Boolean));}
+  function saveEditGuest(id){onUpdateGuest(id,{GuestName:egName,Company:egCompany,VAEmails:egVAs.join(",")});setEditGuestId(null);}
 
   return(<div>
     {/* Absence */}
@@ -972,7 +1072,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       {showAssign&&<div style={{marginTop:14}}>
         <div style={S.row}><div style={{flex:1,minWidth:140}}><label style={S.label}>VA *</label><select style={S.select} value={aVa} onChange={e=>{setAVa(e.target.value);setAProps([]);}}><option value="">Select...</option>{data.vas.filter(v=>v.VATrackerStatus!=="Out").map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <div style={{flex:1,minWidth:140}}><label style={S.label}>Category *</label><select style={S.select} value={aCat} onChange={e=>setACat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
-        <div style={{marginTop:10}}><label style={S.label}>Properties {aProps.length>0&&`(${aProps.length} selected)`}</label>
+        <div style={{marginTop:10}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}><label style={S.label}>Properties {aProps.length>0&&`(${aProps.length} selected)`}</label>{aVa&&<button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"2px 8px",fontSize:10}} onClick={()=>aProps.length===vaProps(aVa).length?setAProps([]):selectAllAProps()}>{aProps.length===vaProps(aVa).length?"Clear All":"Select All"}</button>}</div>
           <div style={{border:`1px solid ${C.gray200}`,borderRadius:4,padding:8,maxHeight:160,overflowY:"auto",background:C.white}}>
             <label style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:13,color:C.gray400,cursor:"pointer",borderBottom:`1px solid ${C.gray100}`}}><input type="checkbox" checked={aProps.length===0} onChange={()=>setAProps([])}/>General (no specific property)</label>
             {(aVa?vaProps(aVa):data.properties).map(p=><label key={p.Title} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:13,color:C.teal700,cursor:"pointer"}}><input type="checkbox" checked={aProps.includes(p.Title)} onChange={()=>toggleAProp(p.Title)}/>{p.PropertyName} ({p.Units}u)</label>)}
@@ -987,7 +1087,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
 
     {/* Recurring */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Recurring Daily Tasks</div><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={()=>setShowRec(!showRec)}>{showRec?"Cancel":"+ Add"}</button></div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Recurring Tasks</div><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={()=>setShowRec(!showRec)}>{showRec?"Cancel":"+ Add"}</button></div>
       {showRec&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}><div style={{flex:1,minWidth:130}}><label style={S.label}>VA *</label><select style={S.select} value={rVa} onChange={e=>{setRVa(e.target.value);setRProps([]);}}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <div style={{flex:1,minWidth:130}}><label style={S.label}>Category *</label><select style={S.select} value={rCat} onChange={e=>setRCat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
@@ -1005,7 +1105,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
             return<div key={r._i} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 0",borderBottom:`1px solid ${C.gray100}`,opacity:r.active?1:0.5}}>
               <span>{catIcon[cat?.name]||"\u{1F4C1}"}</span>
               <div style={{flex:1,minWidth:0}}>{isEd?<div style={{display:"flex",gap:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={editDesc} onChange={e=>setEditDesc(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveEdit(r._i);if(e.key==="Escape")setEditIdx(null);}} autoFocus/><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>saveEdit(r._i)}>{"\u2713"}</button></div>
-                :<div><div style={{fontSize:12,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditIdx(r._i);setEditDesc(r.description);}}>{r.description}</div>{prop&&<div style={{fontSize:10,color:C.gray400}}>{prop.PropertyName}</div>}</div>}</div>
+                :<div><div style={{fontSize:12,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditIdx(r._i);setEditDesc(r.description);}}>{r.description}</div><div style={{fontSize:10,color:C.gray400,display:"flex",gap:4,marginTop:1}}>{prop&&<span>{prop.PropertyName}</span>}{r.frequency==="weekly"?<Badge type="info">Weekly · {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][r.dayOfWeek||1]}</Badge>:<Badge type="neutral">Daily</Badge>}</div></div>}</div>
               {!isEd&&<div style={{display:"flex",gap:3}}>
                 <button style={{...S.btnO(C.info,C.info),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>duplicateRec(r._i)} title="Duplicate for another VA">{"\u{1F4CB}"}</button>
                 <button style={{...S.btnO(r.active?C.warning:C.success,r.active?C.warning:C.success),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>toggleRec(r._i)}>{r.active?"Pause":"On"}</button>
@@ -1103,8 +1203,59 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       })}
     </div>
 
+    {/* Guest Management */}
+    <div style={{...S.card,borderLeft:`3px solid ${C.purple}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
+        <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F441}\u{FE0F}"} Guest Access</div><div style={{fontSize:11,color:C.gray400}}>External clients — read-only, filtered to assigned VAs. Requires User.Invite.All permission in Azure Portal.</div></div>
+        <button style={{...S.btn(C.purple),...S.btnSm}} onClick={()=>setShowAddGuest(!showAddGuest)}>{showAddGuest?"Cancel":"+ Invite Guest"}</button>
+      </div>
+      {showAddGuest&&<div style={{background:C.purpleBg,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.purple}`}}>
+        <div style={S.row}>
+          <div style={{flex:1,minWidth:140}}><label style={S.label}>Full Name *</label><input style={S.input} value={gName} onChange={e=>setGName(e.target.value)} placeholder="Jane Smith"/></div>
+          <div style={{flex:1,minWidth:180}}><label style={S.label}>Email *</label><input style={S.input} value={gEmail} onChange={e=>setGEmail(e.target.value)} placeholder="jane@example.com"/></div>
+          <div style={{flex:1,minWidth:120}}><label style={S.label}>Company</label><input style={S.input} value={gCompany} onChange={e=>setGCompany(e.target.value)} placeholder="Acme Investments"/></div>
+        </div>
+        <div style={{marginTop:10}}><label style={S.label}>Assign VAs * {gVAs.length>0&&`(${gVAs.length} selected)`}</label>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>
+            {data.vas.map(v=>{const sel=gVAs.includes(v.Email);return<label key={v.Email} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 10px",fontSize:12,fontWeight:sel?600:400,color:sel?C.purple:C.teal700,background:sel?C.purpleLight:C.white,border:`1px solid ${sel?C.purple:C.gray200}`,borderRadius:4,cursor:"pointer"}}>
+              <input type="checkbox" checked={sel} onChange={()=>toggleGVA(v.Email)} style={{accentColor:C.purple}}/>{v.Name}
+            </label>;})}
+          </div>
+          {gVAs.length===0&&<div style={{fontSize:11,color:C.error,marginTop:4}}>{"\u26A0"} Select at least one VA</div>}
+        </div>
+        <div style={{marginTop:10,padding:8,background:C.teal50,borderRadius:4,fontSize:11,color:C.teal600}}>{"\u{1F512}"} Azure B2B invite will be emailed automatically. Guest signs in with their own Microsoft account.</div>
+        <button style={{...S.btn(C.purple),width:"100%",marginTop:10,opacity:(!gName||!gEmail||!gVAs.length)?0.5:1}} onClick={handleAddGuest}>{"\u{1F4E7}"} Send Invite & Create Access</button>
+      </div>}
+      {(data.guests||[]).length===0&&!showAddGuest&&<div style={{textAlign:"center",padding:20,color:C.gray400,fontSize:13}}>No guests invited yet.</div>}
+      {(data.guests||[]).map(g=>{const gVaList=(g.VAEmails||"").split(",").map(e=>e.trim()).filter(Boolean);const gVaNames=gVaList.map(e=>data.vas.find(v=>v.Email?.toLowerCase()===e.toLowerCase())?.Name||e).join(", ");const isEd=editGuestId===g.id;
+        return<div key={g.id} style={{padding:"10px 0",borderBottom:`1px solid ${C.gray100}`}}>
+          {isEd?<div style={{background:C.purpleBg,borderRadius:6,padding:12,border:`1px solid ${C.purple}`}}>
+            <div style={S.row}>
+              <div style={{flex:1}}><label style={S.label}>Name</label><input style={S.input} value={egName} onChange={e=>setEgName(e.target.value)}/></div>
+              <div style={{flex:1}}><label style={S.label}>Company</label><input style={S.input} value={egCompany} onChange={e=>setEgCompany(e.target.value)}/></div>
+            </div>
+            <div style={{marginTop:8}}><label style={S.label}>VAs</label><div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>{data.vas.map(v=>{const sel=egVAs.includes(v.Email);return<label key={v.Email} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 8px",fontSize:12,fontWeight:sel?600:400,color:sel?C.purple:C.teal700,background:sel?C.purpleLight:C.white,border:`1px solid ${sel?C.purple:C.gray200}`,borderRadius:4,cursor:"pointer"}}><input type="checkbox" checked={sel} onChange={()=>toggleEGVA(v.Email)} style={{accentColor:C.purple}}/>{v.Name}</label>;})}</div></div>
+            <div style={{display:"flex",gap:6,marginTop:10}}>
+              <button style={{...S.btn(C.success),flex:1}} onClick={()=>saveEditGuest(g.id)}>{"\u2713"} Save</button>
+              <button style={{...S.btnO(C.gray400,C.gray200),flex:1}} onClick={()=>setEditGuestId(null)}>Cancel</button>
+            </div>
+          </div>:<div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:13,fontWeight:600,color:C.teal700}}>{g.GuestName}</span><Badge type="purple">Guest</Badge>{g.Company&&<span style={{fontSize:11,color:C.gray400}}>· {g.Company}</span>}</div>
+              <div style={{fontSize:11,color:C.gray400,marginTop:2}}>{g.GuestEmail} · Invited {fD(g.InvitedDate)} by {g.InvitedBy}</div>
+              <div style={{fontSize:11,color:C.purple,marginTop:2}}>{"\u{1F441}\u{FE0F}"} {gVaNames||"No VAs assigned"}</div>
+            </div>
+            <div style={{display:"flex",gap:3}}>
+              <button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>startEditGuest(g)}>Edit</button>
+              <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>onDeactivateGuest(g.id,g.GuestName)}>Revoke</button>
+            </div>
+          </div>}
+        </div>;
+      })}
+    </div>
+
     {/* Data Sources */}
-    <div style={{...S.card,padding:12,background:C.teal50,border:`1px solid ${C.teal100}`}}><div style={{fontSize:12,color:C.teal600}}><strong>Data:</strong> Employees → VAs/PMs/Roles. VA_Properties → property registry. VA_Portfolios → assignments. VA_TrackerConfig → categories/recurring/settings. VA_Activity → tasks/shifts/absences. Auth: MSAL.</div></div>
+    <div style={{...S.card,padding:12,background:C.teal50,border:`1px solid ${C.teal100}`}}><div style={{fontSize:12,color:C.teal600}}><strong>Data:</strong> Employees → VAs/PMs/Roles. VA_Properties → property registry. VA_Portfolios → assignments. VA_TrackerConfig → categories/recurring/settings. VA_Activity → tasks/shifts/absences. VA_Guests → guest access. Auth: MSAL + Azure B2B.</div></div>
 
     {/* Weekly Report */}
     <div style={S.card}>
