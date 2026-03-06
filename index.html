@@ -262,7 +262,10 @@ function App(){
 
   function buildQueue(d,email){
     // 1. Load all persisted Queued tasks from VA_Activity
-    const persistedQueued=d.activities.filter(a=>a.ActivityType==="Task"&&(a.Status==="Queued"||a.Status==="In Progress"));
+    console.log("[VT] First activity raw:",d.activities[0]);
+    console.log("[VT] Activity types:",[...new Set(d.activities.map(a=>a.ActivityType))]);
+    console.log("[VT] Activity statuses:",[...new Set(d.activities.map(a=>a.Status))]);
+    const persistedQueued=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&(a.Status==="Queued"||a.Status==="In Progress"));
     const q=[],cv=[];
     
     persistedQueued.forEach(a=>{
@@ -311,6 +314,7 @@ function App(){
       });
 
       // Set base queue state FIRST, then background-save new tasks and append
+      console.log("[VT] buildQueue set:",{qLen:q.length,cvLen:cv.length,qSources:[...new Set(q.map(t=>t.Source))],qEmails:[...new Set(q.map(t=>t.VAEmail))],cvEmails:[...new Set(cv.map(t=>t.VAEmail))]});
       setQueue(q);setCovQ(cv);
 
       if(toSave.length>0){
@@ -328,6 +332,7 @@ function App(){
         })();
       }
     }else{
+      console.log("[VT] buildQueue(no recurring):",{qLen:q.length,cvLen:cv.length,qEmails:[...new Set(q.map(t=>t.VAEmail))]});
       setQueue(q);setCovQ(cv);
     }
   }
@@ -687,7 +692,7 @@ function App(){
   const myPort=data?data.portfolios.filter(p=>p.VAEmail&&p.VAEmail.toLowerCase()===myEmail):[];
   const myProps=data?myPort.map(p=>data.properties.find(pr=>pr.Title===p.PropertyId)).filter(Boolean):[];
   const mgrProps=myManagedProps();
-  const myQ=queue.filter(t=>isVA?t.VAEmail.toLowerCase()===myEmail:true);
+  const myQ=queue.filter(t=>isVA?(t.VAEmail&&t.VAEmail.toLowerCase()===myEmail):true);
   const myTm=timers.filter(t=>isVA?t.VAEmail.toLowerCase()===myEmail:true);
   const outVAs=data?data.vas.filter(v=>v.VATrackerStatus==="Out"):[];
   // Guest computed
@@ -815,7 +820,7 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
         <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:8}}>
           {filteredVAs.map(va=>{
             const isOut=va.VATrackerStatus==="Out";
-            const vQ=queue.filter(t=>t.VAEmail.toLowerCase()===va.Email.toLowerCase());
+            const vQ=queue.filter(t=>t.VAEmail&&t.VAEmail.toLowerCase()===va.Email.toLowerCase());
             const vT=timers.filter(t=>t.VAEmail.toLowerCase()===va.Email.toLowerCase());
             const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase());
             return(
@@ -987,10 +992,13 @@ function groupTasks(tasks){
 function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onAddTask,onDeleteTask,onCompleteSubTask,config}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   const isAdm=role==="admin";
-  const myTasks=isAdm?queue:queue.filter(t=>t.VAEmail.toLowerCase()===myEmail);
-  const daily=myTasks.filter(t=>t.Source==="Daily");
+  const myTasks=isAdm?queue:queue.filter(t=>t.VAEmail&&t.VAEmail.toLowerCase()===myEmail);
+  console.log("[VT] MyTasksView:",{myEmail,queueLen:queue.length,myTasksLen:myTasks.length,allEmails:[...new Set(queue.map(t=>t.VAEmail))]});
+  const daily=myTasks.filter(t=>t.Source==="Daily"||t.Source==="Weekly");
   const assigned=myTasks.filter(t=>t.Source==="Assigned"||t.Source==="Coverage");
   const adhoc=myTasks.filter(t=>t.Source==="Ad-Hoc");
+  // Catch-all: tasks that don't match any bucket (shouldn't happen, but show them)
+  const other=myTasks.filter(t=>!["Daily","Weekly","Assigned","Coverage","Ad-Hoc"].includes(t.Source));
   const myActive=isAdm?timers.length:timers.filter(t=>t.VAEmail.toLowerCase()===myEmail).length;
   const cats=config?.categories||[];
   const portProps=data?data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===myEmail).map(p=>data.properties.find(pr=>pr.Title===p.PropertyId)).filter(Boolean):[];
@@ -1039,6 +1047,11 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
       )}</div>}
     {/* Ad-Hoc */}
     {adhoc.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4DD}"} Extra ({adhoc.length})</div>{groupTasks(adhoc).map((item,i)=>item.type==="single"
+        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
+        :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
+      )}</div>}
+    {/* Catch-all for any other source types */}
+    {other.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Other ({other.length})</div>{groupTasks(other).map((item,i)=>item.type==="single"
         ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
         :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
       )}</div>}
