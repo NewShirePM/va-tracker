@@ -1352,7 +1352,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   function toggleRProp(id){setRProps(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);}
   function selectAllRProps(){const ps=vaProps(rVa);setRProps(ps.map(p=>p.Title));}
 
-  function addRec(){if(!rVa||!rCat||!rDesc)return;
+  function addRec(){console.log("[VT] addRec fired",{rVa,rCat,rDesc,rFreq,rDay});if(!rVa||!rCat||!rDesc)return;
     const propList=rProps.length>0?rProps:[""];
     const newTasks=propList.map(pid=>({vaEmail:rVa,category:rCat,description:rDesc,propertyId:pid,active:true,frequency:rFreq,dayOfWeek:rFreq==="weekly"?rDay:undefined,icon:rIcon}));
     saveRec([...rTasks,...newTasks]);setRDesc("");setRVa("");setRCat("");setRProps([]);setRFreq("daily");setRDay(1);setRIcon("folder");setShowRec(false);}
