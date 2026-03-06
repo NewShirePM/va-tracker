@@ -393,6 +393,65 @@ function App(){
     }catch(e){fl("Error saving task: "+e.message);}
   }
 
+  // ── Delete queued task (admin/manager) ──
+  async function deleteTask(task){
+    if(!task._spId){
+      // Local only — just remove from state
+      setQueue(p=>p.filter(t=>t._localId!==task._localId));
+      setCovQ(p=>p.filter(t=>t._localId!==task._localId));
+      fl("Task removed");return;
+    }
+    try{
+      const tk=await gT();
+      // Mark as "Cancelled" instead of deleting — preserves audit trail
+      await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:"Incomplete",Notes:"Removed by admin"});
+      setQueue(p=>p.filter(t=>t._localId!==task._localId));
+      setCovQ(p=>p.filter(t=>t._localId!==task._localId));
+      fl("Task removed");
+    }catch(e){fl("Error: "+e.message);}
+  }
+
+  // ── Weekly Report ──
+  function generateWeeklyReport(){
+    if(!data)return null;
+    const now=new Date();const mon=new Date(now);mon.setDate(mon.getDate()-(mon.getDay()+6)%7-7);mon.setHours(0,0,0,0);
+    const sun=new Date(mon);sun.setDate(sun.getDate()+6);sun.setHours(23,59,59,999);
+    const from=mon.toISOString().slice(0,10),to=sun.toISOString().slice(0,10);
+    const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(a.ActivityDate,from,to));
+    const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(a.ActivityDate,from,to));
+    const done=tasks.filter(t=>t.Status==="Completed");
+    const blocked=tasks.filter(t=>t.Status==="Blocked");
+    const inc=tasks.filter(t=>t.Status==="Incomplete");
+
+    let report=`VA PRODUCTIVITY TRACKER — WEEKLY REPORT\nNewShire Property Management\nWeek: ${fD(from)} – ${fD(to)}\nGenerated: ${new Date().toLocaleString()}\nPrepared by: Brandy Turner\n${"=".repeat(60)}\n\n`;
+    report+=`SUMMARY\n${"-".repeat(40)}\nTotal Tasks: ${tasks.length}\nCompleted: ${done.length} (${tasks.length?Math.round(done.length/tasks.length*100):0}%)\nBlocked: ${blocked.length}\nIncomplete: ${inc.length}\n\n`;
+
+    data.vas.forEach(va=>{
+      const vT=tasks.filter(t=>t.VAEmail===va.Email);const vD=vT.filter(t=>t.Status==="Completed");const vB=vT.filter(t=>t.Status==="Blocked");const vI=vT.filter(t=>t.Status==="Incomplete");
+      const vS=shifts.filter(s=>s.VAEmail===va.Email);const vSm=vS.reduce((s,a)=>s+(a.WorkMinutes||0),0);const vTm=vD.reduce((s,t)=>s+(t.DurationMin||0),0);
+      const vU=vSm>0?Math.round(vTm/vSm*100):0;const vR=vT.length?Math.round(vD.length/vT.length*100):0;
+      report+=`\n${"=".repeat(60)}\n${va.Name.toUpperCase()}${va.VATrackerStatus==="Out"?" [OUT]":""}\n${"=".repeat(60)}\n`;
+      report+=`Tasks: ${vD.length}/${vT.length} completed (${vR}%)\nShift Time: ${fM(vSm)} | Task Time: ${fM(vTm)} | Utilization: ${vU}%\n`;
+      if(vB.length)report+=`\nBLOCKED (${vB.length}):\n${vB.map(t=>`  • ${t.Title} — ${t.PropertyName}${t.Notes?" — "+t.Notes:""}`).join("\n")}\n`;
+      if(vI.length)report+=`\nINCOMPLETE (${vI.length}):\n${vI.map(t=>`  • ${t.Title} — ${t.PropertyName}${t.Notes?" — "+t.Notes:""}`).join("\n")}\n`;
+
+      // Category breakdown
+      const catM={};vD.forEach(t=>{if(!catM[t.Category])catM[t.Category]={c:0,m:0};catM[t.Category].c++;catM[t.Category].m+=(t.DurationMin||0);});
+      const catL=Object.entries(catM).sort((a,b)=>b[1].m-a[1].m);
+      if(catL.length){report+=`\nTIME BY CATEGORY:\n${catL.map(([cat,d])=>`  ${cat}: ${d.c} tasks, ${fM(d.m)}`).join("\n")}\n`;}
+
+      // Property breakdown
+      const propM={};vT.forEach(t=>{const pn=t.PropertyName||"General";if(!propM[pn])propM[pn]={done:0,total:0};propM[pn].total++;if(t.Status==="Completed")propM[pn].done++;});
+      report+=`\nPROPERTY BREAKDOWN:\n${Object.entries(propM).map(([pn,d])=>`  ${pn}: ${d.done}/${d.total}`).join("\n")}\n`;
+    });
+
+    // Coverage summary
+    const covTasks=tasks.filter(t=>t.CoverageForEmail);
+    if(covTasks.length)report+=`\n${"=".repeat(60)}\nCOVERAGE TASKS: ${covTasks.length}\n${covTasks.map(t=>`  ${t.VAName} covered for ${t.CoverageForName}: ${t.Title}`).join("\n")}\n`;
+
+    return{report,from,to};
+  }
+
   // ── Config update ──
   async function updateConfig(nc){
     try{const t=await gT();const ci=await gAll(t,`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`);
@@ -496,12 +555,12 @@ function App(){
       <div style={S.content}>
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
         {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
-        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} config={data?.config}/>}
+        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} config={data?.config}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
         {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} generateReport={generateWeeklyReport}/>}
       </div>
     </div>
   );
@@ -619,21 +678,24 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
 // ============================================================
 // TASK ROW
 // ============================================================
-function TaskRow({task,onStart,showVA}){
+function TaskRow({task,onStart,onDelete,showVA}){
   return(<div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
     <span style={{fontSize:16}}>{catIcon[task.Category]||"\u{1F4C1}"}</span>
     <div style={{flex:1,minWidth:0}}>
       <div style={{fontSize:13,fontWeight:500,color:C.teal700}}>{task.Title}{task.CoverageForName&&<>{" "}<Badge type="warning">Coverage</Badge></>}</div>
       <div style={{fontSize:11,color:C.gray400}}>{showVA?`${task.VAName} · `:""}{task.PropertyName}{task.Priority!=="Normal"&&<>{" · "}<Badge type={task.Priority==="Urgent"?"error":"warning"}>{task.Priority}</Badge></>}{task.Notes&&` · \u{1F4AC} ${task.Notes}`}</div>
     </div>
-    {onStart&&<button style={{...S.btn(C.success),...S.btnSm}} onClick={onStart}>{"\u25B6"} Start</button>}
+    <div style={{display:"flex",gap:4,flexShrink:0}}>
+      {onStart&&<button style={{...S.btn(C.success),...S.btnSm}} onClick={onStart}>{"\u25B6"} Start</button>}
+      {onDelete&&<button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"5px 8px"}} onClick={()=>{if(window.confirm("Remove this task?"))onDelete(task);}} title="Remove task">{"\u2715"}</button>}
+    </div>
   </div>);
 }
 
 // ============================================================
 // MY TASKS (VA view)
 // ============================================================
-function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onAddTask,config}){
+function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onAddTask,onDeleteTask,config}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   const isAdm=role==="admin";
   const myTasks=isAdm?queue:queue.filter(t=>t.VAEmail.toLowerCase()===myEmail);
@@ -677,11 +739,11 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
     {/* Daily */}
     <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",...(daily.length?{paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:6}:{})}}><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Daily Tasks</div><span style={{fontSize:12,color:C.gray400}}>{daily.length} left</span></div>
       {!daily.length&&<p style={{color:C.gray400,fontSize:13,marginTop:10}}>All done!</p>}
-      {daily.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)}/>)}</div>
+      {daily.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm}/>)}</div>
     {/* Assigned */}
-    {assigned.length>0&&<div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Assigned & Coverage ({assigned.length})</div>{assigned.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)}/>)}</div>}
+    {assigned.length>0&&<div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Assigned & Coverage ({assigned.length})</div>{assigned.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm}/>)}</div>}
     {/* Ad-Hoc */}
-    {adhoc.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4DD}"} Extra ({adhoc.length})</div>{adhoc.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)}/>)}</div>}
+    {adhoc.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4DD}"} Extra ({adhoc.length})</div>{adhoc.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm}/>)}</div>}
     {/* Add Task */}
     <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:14,fontWeight:600,color:C.teal700}}>➕ Add Task</div><button style={S.btnO(C.teal700,C.teal100)} onClick={()=>setShowForm(!showForm)}>{showForm?"Cancel":"New"}</button></div>
       {showForm&&<div style={{marginTop:14}}>
@@ -854,7 +916,7 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps}){
 // ============================================================
 // ADMIN VIEW
 // ============================================================
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,generateReport}){
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
@@ -1043,6 +1105,34 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
 
     {/* Data Sources */}
     <div style={{...S.card,padding:12,background:C.teal50,border:`1px solid ${C.teal100}`}}><div style={{fontSize:12,color:C.teal600}}><strong>Data:</strong> Employees → VAs/PMs/Roles. VA_Properties → property registry. VA_Portfolios → assignments. VA_TrackerConfig → categories/recurring/settings. VA_Activity → tasks/shifts/absences. Auth: MSAL.</div></div>
+
+    {/* Weekly Report */}
+    <div style={S.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
+        <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CA}"} Weekly Report</div><div style={{fontSize:12,color:C.gray400}}>Previous week's performance summary</div></div>
+        <button style={S.btn(C.headerBg)} onClick={()=>{
+          const r=generateReport();if(!r)return;
+          const blob=new Blob([r.report],{type:"text/plain"});
+          const url=URL.createObjectURL(blob);const a=document.createElement("a");
+          a.href=url;a.download=`VA-Weekly-Report-${r.from}-to-${r.to}.txt`;a.click();URL.revokeObjectURL(url);
+        }}>{"\u{1F4E5}"} Download Report</button>
+      </div>
+      <button style={{...S.btnO(C.teal600,C.teal100),width:"100%"}} onClick={()=>{
+        const r=generateReport();if(!r)return;
+        const w=window.open("","_blank","width=800,height=600");
+        w.document.write(`<pre style="font-family:Consolas,monospace;font-size:13px;padding:20px;white-space:pre-wrap;">${r.report.replace(/</g,"&lt;")}</pre>`);
+        w.document.title=`VA Report ${r.from} to ${r.to}`;
+      }}>Preview Report</button>
+    </div>
+
+    {/* Queued Task Management */}
+    {queue.length>0&&<div style={S.card}>
+      <div style={S.cardTitle}>{"\u{1F5D1}\u{FE0F}"} Queued Tasks ({queue.length})</div>
+      <div style={{fontSize:12,color:C.gray400,marginBottom:10}}>Remove tasks that should no longer be in the queue.</div>
+      {data.vas.map(va=>{const vq=queue.filter(t=>t.VAEmail?.toLowerCase()===va.Email.toLowerCase());if(!vq.length)return null;
+        return<div key={va.Email} style={{marginBottom:10}}><div style={{fontSize:12,fontWeight:600,color:C.teal600,textTransform:"uppercase",marginBottom:4}}>{va.Name} ({vq.length})</div>
+          {vq.map(t=><TaskRow key={t._localId} task={t} onDelete={onDeleteTask}/>)}</div>;})}
+    </div>}
 
     {/* Close Day */}
     <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><button style={S.btn(C.warning,C.dark)} onClick={onCloseDay}>Close Day</button></div></div>
