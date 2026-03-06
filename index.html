@@ -968,7 +968,7 @@ function TaskRow({task,onStart,onDelete,showVA,onComplete,compact}){
 // ============================================================
 // TASK GROUP ROW — collapsible parent for grouped tasks
 // ============================================================
-function TaskGroupRow({tasks,onStartGroup,onDelete,onCompleteSubTask,showVA}){
+function TaskGroupRow({tasks,onStartGroup,onDelete,onCompleteSubTask,showVA,sourceColor,sourceLabel}){
   const[expanded,setExpanded]=useState(false);
   const first=tasks[0];
   const total=tasks.length;
@@ -986,11 +986,11 @@ function TaskGroupRow({tasks,onStartGroup,onDelete,onCompleteSubTask,showVA}){
       <div style={{flex:1,minWidth:0}}>
         <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
           <span style={{fontSize:13,fontWeight:600,color:allDone?C.success:anyBlocked?C.error:C.teal700}}>{first.Title}</span>
-          <span style={{fontSize:10,fontWeight:600,background:C.teal100,color:C.teal700,borderRadius:99,padding:"1px 7px"}}>{total} properties</span>
+          <span style={{fontSize:10,fontWeight:600,background:C.teal100,color:C.teal700,borderRadius:99,padding:"1px 7px"}}>{total} {total===1?"property":"properties"}</span>
           {first.Priority!=="Normal"&&<Badge type={first.Priority==="Urgent"?"error":"warning"}>{first.Priority}</Badge>}
+          {sourceLabel&&<span style={{fontSize:10,fontWeight:700,color:sourceColor||C.gray400,textTransform:"uppercase",letterSpacing:"0.04em"}}>{sourceLabel}</span>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8,marginTop:3}}>
-          {/* Progress bar */}
           <div style={{width:80,height:5,background:C.gray100,borderRadius:3,overflow:"hidden",flexShrink:0}}>
             <div style={{width:`${pct}%`,height:"100%",background:allDone?C.success:anyBlocked?C.error:C.gold500,borderRadius:3,transition:"width 0.3s"}}/>
           </div>
@@ -1606,20 +1606,15 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
 
 
 // ============================================================
-// ADMIN QUEUE PANEL — collapsible by VA, then by source type
+// ADMIN QUEUE PANEL — one level: VA collapse, tasks grouped inside
 // ============================================================
 function AdminQueuePanel({queue,covQ,data,onDeleteTask,onCompleteSubTask}){
   const[openVAs,setOpenVAs]=useState({});
-  const[openSrc,setOpenSrc]=useState({});
   const allQ=[...queue,...covQ];
   const total=allQ.length;
-  console.log("[VT] AdminQueuePanel allQ sample:",allQ.slice(0,3).map(t=>({Title:t.Title,VAEmail:t.VAEmail,Source:t.Source,GroupId:t.GroupId,PropertyId:t.PropertyId,PropertyName:t.PropertyName})));
-
   function toggleVA(email){setOpenVAs(p=>({...p,[email]:!p[email]}));}
-  function toggleSrc(key){setOpenSrc(p=>({...p,[key]:!p[key]}));}
-
-  const srcOrder=["Daily","Weekly","Assigned","Ad-Hoc","Coverage"];
-  const srcColors={Daily:C.teal600,Weekly:C.info,Assigned:C.gold700,"Ad-Hoc":C.gray400,Coverage:C.warning};
+  const srcLabel={Daily:"Daily",Weekly:"Weekly",Assigned:"Assigned","Ad-Hoc":"Ad-Hoc",Coverage:"Coverage"};
+  const srcColor={Daily:C.teal600,Weekly:C.info,Assigned:C.gold700,"Ad-Hoc":C.gray400,Coverage:C.warning};
 
   return(<div style={S.card}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
@@ -1633,41 +1628,43 @@ function AdminQueuePanel({queue,covQ,data,onDeleteTask,onCompleteSubTask}){
       const vq=allQ.filter(t=>t.VAEmail?.toLowerCase()===va.Email.toLowerCase());
       if(!vq.length)return null;
       const isOpen=!!openVAs[va.Email];
-      const daily=vq.filter(t=>t.Source==="Daily"||t.Source==="Weekly");
-      const other=vq.filter(t=>t.Source!=="Daily"&&t.Source!=="Weekly");
+      const grouped=groupTasks(vq,true);
+      const groupCount=grouped.filter(i=>i.type==="group").length;
+      const singleCount=grouped.filter(i=>i.type==="single").length;
       return<div key={va.Email} style={{marginBottom:6,border:`1px solid ${C.gray200}`,borderRadius:5,overflow:"hidden"}}>
-        {/* VA header row — clickable */}
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",background:C.teal50,cursor:"pointer",userSelect:"none"}} onClick={()=>toggleVA(va.Email)}>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",background:C.teal50,cursor:"pointer",userSelect:"none"}} onClick={()=>toggleVA(va.Email)}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <span style={{fontSize:13,fontWeight:700,color:C.teal700}}>{va.Name}</span>
-            <span style={{fontSize:11,color:C.gray400}}>{vq.length} pending</span>
-            {daily.length>0&&<span style={{fontSize:10,padding:"1px 6px",borderRadius:99,background:C.teal100,color:C.teal700,fontWeight:600}}>{daily.length} daily</span>}
-            {other.length>0&&<span style={{fontSize:10,padding:"1px 6px",borderRadius:99,background:C.gold100,color:C.gold700,fontWeight:600}}>{other.length} assigned</span>}
+            <span style={{fontSize:11,color:C.gray400}}>{grouped.length} task{grouped.length!==1?"s":""}</span>
+            {groupCount>0&&<span style={{fontSize:10,padding:"1px 6px",borderRadius:99,background:C.teal100,color:C.teal700,fontWeight:600}}>{groupCount} grouped</span>}
           </div>
           <span style={{fontSize:12,color:C.gray400}}>{isOpen?"▲":"▼"}</span>
         </div>
-        {/* VA body — source-grouped */}
-        {isOpen&&<div style={{padding:"8px 12px"}}>
-          {srcOrder.map(src=>{
-            const st=vq.filter(t=>t.Source===src);
-            if(!st.length)return null;
-            const srcKey=`${va.Email}|${src}`;
-            const srcOpen=!!openSrc[srcKey]; // default closed
-            return<div key={src} style={{marginBottom:6}}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${C.gray100}`,cursor:"pointer",userSelect:"none"}} onClick={()=>toggleSrc(srcKey)}>
-                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                  <span style={{fontSize:10,fontWeight:700,color:srcColors[src]||C.gray400,textTransform:"uppercase",letterSpacing:"0.05em"}}>{src}</span>
-                  <span style={{fontSize:10,color:C.gray400}}>({st.length})</span>
+        {isOpen&&<div style={{padding:"4px 12px 10px"}}>
+          {grouped.map((item,i)=>{
+            if(item.type==="single"){
+              const t=item.task;
+              const sc=srcColor[t.Source]||C.gray400;
+              return<div key={t._localId} style={{borderBottom:`1px solid ${C.gray100}`}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0"}}>
+                  <span style={{fontSize:15}}>{getIcon(t.icon,t.Category)}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:500,color:C.teal700}}>{t.Title}</div>
+                    <div style={{fontSize:11,color:C.gray400,display:"flex",gap:6,marginTop:1,flexWrap:"wrap"}}>
+                      <span style={{color:sc,fontWeight:600,textTransform:"uppercase",fontSize:10}}>{t.Source}</span>
+                      {t.PropertyName&&t.PropertyName!=="General"&&<span>{t.PropertyName}</span>}
+                      {t.Priority!=="Normal"&&<Badge type={t.Priority==="Urgent"?"error":"warning"}>{t.Priority}</Badge>}
+                    </div>
+                  </div>
+                  {onDeleteTask&&<button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"4px 8px"}} onClick={()=>{if(window.confirm("Remove?"))onDeleteTask(t);}}>✕</button>}
                 </div>
-                <span style={{fontSize:10,color:C.gray400}}>{srcOpen?"▲":"▼"}</span>
-              </div>
-              {srcOpen&&<div style={{paddingLeft:8,paddingTop:4}}>
-                {groupTasks(st,true).map((item,i)=>item.type==="single"
-                  ?<TaskRow key={item.task._localId} task={item.task} onDelete={onDeleteTask} onComplete={onCompleteSubTask}/>
-                  :<TaskGroupRow key={item.tasks[0].GroupId||item.tasks[0]._localId} tasks={item.tasks} onDelete={onDeleteTask} onCompleteSubTask={onCompleteSubTask} showVA={false}/>
-                )}
-              </div>}
-            </div>;
+              </div>;
+            }
+            // Grouped
+            const g=item.tasks;
+            const first=g[0];
+            const sc=srcColor[first.Source]||C.gray400;
+            return<TaskGroupRow key={first.GroupId||first._localId} tasks={g} onDelete={onDeleteTask} onCompleteSubTask={onCompleteSubTask} showVA={false} sourceColor={sc} sourceLabel={first.Source}/>;
           })}
         </div>}
       </div>;
