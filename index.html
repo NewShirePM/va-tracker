@@ -463,12 +463,10 @@ function App(){
   // TABS
   // ============================================================
   const TABS=[];
-  if(isAdmin)TABS.push({n:"Dashboard",k:"dash"});
-  if(role==="manager")TABS.push({n:"Dashboard",k:"mdash"});
-  if(isVA)TABS.push({n:`My Tasks${myQ.length?` (${myQ.length})`:""}`,k:"tasks"});
-  if(isVA)TABS.push({n:`Active${myTm.length?` (${myTm.length})`:""}`,k:"active"});
-  if(role==="manager")TABS.push({n:`My Properties (${mgrProps.length})`,k:"mprops"});
-  if(isAdmin)TABS.push({n:"Active"+((timers.length)?` (${timers.length})`:""),k:"active"});
+  if(isMgr)TABS.push({n:"Dashboard",k:isAdmin?"dash":"mdash"});
+  if(isVA||isAdmin)TABS.push({n:`My Tasks${myQ.length?` (${myQ.length})`:""}`,k:"tasks"});
+  if(isVA||isAdmin)TABS.push({n:`Active${(isAdmin?timers.length:myTm.length)?` (${isAdmin?timers.length:myTm.length})`:""}`,k:"active"});
+  if(role==="manager"||isAdmin)TABS.push({n:`My Properties${mgrProps.length?` (${mgrProps.length})`:isAdmin?" (All)":""}`,k:"mprops"});
   TABS.push({n:"History",k:"history"});
   TABS.push({n:"Scorecard",k:"score"});
   if(isAdmin)TABS.push({n:"Admin",k:"admin"});
@@ -499,7 +497,7 @@ function App(){
         {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
         {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} config={data?.config}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
-        {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty}/>}
+        {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
         {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps}/>}
         {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty}/>}
@@ -636,11 +634,12 @@ function TaskRow({task,onStart,showVA}){
 // ============================================================
 function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onAddTask,config}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
-  const myTasks=queue.filter(t=>t.VAEmail.toLowerCase()===myEmail);
-  const daily=myTasks.filter(t=>t.Source==="Daily"&&t.ActivityDate===today());
+  const isAdm=role==="admin";
+  const myTasks=isAdm?queue:queue.filter(t=>t.VAEmail.toLowerCase()===myEmail);
+  const daily=myTasks.filter(t=>t.Source==="Daily");
   const assigned=myTasks.filter(t=>t.Source==="Assigned"||t.Source==="Coverage");
   const adhoc=myTasks.filter(t=>t.Source==="Ad-Hoc");
-  const myActive=timers.filter(t=>t.VAEmail.toLowerCase()===myEmail).length;
+  const myActive=isAdm?timers.length:timers.filter(t=>t.VAEmail.toLowerCase()===myEmail).length;
   const cats=config?.categories||[];
   const portProps=data?data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===myEmail).map(p=>data.properties.find(pr=>pr.Title===p.PropertyId)).filter(Boolean):[];
   let shE=0,bkE=0;
@@ -861,6 +860,9 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   const[portVa,setPortVa]=useState("");const[portProp,setPortProp]=useState("");
   const[showAddProp,setShowAddProp]=useState(false);const[npName,setNpName]=useState("");const[npGroup,setNpGroup]=useState("Multifamily");const[npUnits,setNpUnits]=useState("");const[npPm,setNpPm]=useState("");
   const[editPropId,setEditPropId]=useState(null);const[epName,setEpName]=useState("");const[epUnits,setEpUnits]=useState("");
+  // Category management
+  const[showAddCat,setShowAddCat]=useState(false);const[ncName,setNcName]=useState("");const[ncIcon,setNcIcon]=useState("folder");
+  const[editCatId,setEditCatId]=useState(null);const[ecName,setEcName]=useState("");
 
   if(!data)return null;
   const cats=config?.categories||[];const rTasks=config?.recurringTasks||[];
@@ -946,6 +948,62 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
             <td style={{...S.td,fontSize:12}}>{va?va.Name:<span style={{color:C.gray400,fontStyle:"italic"}}>Unassigned</span>}</td>
             <td style={S.td}>{isEd?<div style={{display:"flex",gap:3}}><button style={{...S.btn(C.success),...S.btnSm,padding:"3px 8px"}} onClick={()=>{onEditProperty(p.id,{PropertyName:epName,Units:parseInt(epUnits)||p.Units});setEditPropId(null);}}>{"\u2713"}</button><button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm,padding:"3px 8px"}} onClick={()=>setEditPropId(null)}>{"\u2715"}</button></div>:<div style={{display:"flex",gap:3}}><button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>{setEditPropId(p.id);setEpName(p.PropertyName);setEpUnits(String(p.Units||0));}}>Edit</button><button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>onDeactivateProperty(p.id,p.PropertyName)}>Deactivate</button></div>}</td></tr>;
         })}</tbody></table></div>
+    </div>
+
+    {/* Category Management */}
+    <div style={S.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
+        <div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3F7}\u{FE0F}"} Task Categories</div>
+        <button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={()=>setShowAddCat(!showAddCat)}>{showAddCat?"Cancel":"+ Add"}</button>
+      </div>
+      {showAddCat&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
+        <div style={S.row}>
+          <div style={{flex:2,minWidth:150}}><label style={S.label}>Category Name *</label><input style={S.input} value={ncName} onChange={e=>setNcName(e.target.value)} placeholder="e.g., Leasing"/></div>
+          <div style={{flex:1,minWidth:120}}><label style={S.label}>Icon</label>
+            <select style={S.select} value={ncIcon} onChange={e=>setNcIcon(e.target.value)}>
+              <option value="wrench">{"\u{1F527}"} Wrench</option>
+              <option value="megaphone">{"\u{1F4E2}"} Megaphone</option>
+              <option value="chat">{"\u{1F4AC}"} Chat</option>
+              <option value="chart">{"\u{1F4CA}"} Chart</option>
+              <option value="search">{"\u{1F50D}"} Search</option>
+              <option value="document">{"\u{1F4DD}"} Document</option>
+              <option value="money">{"\u{1F4B0}"} Money</option>
+              <option value="folder">{"\u{1F4C1}"} Folder</option>
+              <option value="key">{"\u{1F511}"} Key</option>
+              <option value="house">{"\u{1F3E0}"} House</option>
+              <option value="handshake">{"\u{1F91D}"} Handshake</option>
+              <option value="clipboard">{"\u{1F4CB}"} Clipboard</option>
+              <option value="phone">{"\u{1F4DE}"} Phone</option>
+              <option value="email">{"\u{1F4E7}"} Email</option>
+            </select>
+          </div>
+        </div>
+        <button style={{...S.btn(C.success),width:"100%",marginTop:10}} onClick={()=>{
+          if(!ncName)return;
+          const newId="c"+Date.now().toString(36);
+          const newCats=[...cats,{id:newId,name:ncName,icon:ncIcon}];
+          onUpdateConfig({...config,categories:newCats});
+          // Also add to VA_Activity Category choice column (note: SharePoint choice columns auto-expand when new values are written)
+          setNcName("");setNcIcon("folder");setShowAddCat(false);
+        }}>{"\u2713"} Add Category</button>
+      </div>}
+      {cats.map((c,i)=>{
+        const iconMap={wrench:"\u{1F527}",megaphone:"\u{1F4E2}",chat:"\u{1F4AC}",chart:"\u{1F4CA}",search:"\u{1F50D}",document:"\u{1F4DD}",money:"\u{1F4B0}",folder:"\u{1F4C1}",key:"\u{1F511}",house:"\u{1F3E0}",handshake:"\u{1F91D}",clipboard:"\u{1F4CB}",phone:"\u{1F4DE}",email:"\u{1F4E7}"};
+        const isEd=editCatId===c.id;
+        return<div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:`1px solid ${C.gray100}`}}>
+          <span style={{fontSize:16}}>{iconMap[c.icon]||catIcon[c.name]||"\u{1F4C1}"}</span>
+          <div style={{flex:1}}>
+            {isEd?<div style={{display:"flex",gap:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={ecName} onChange={e=>setEcName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const u=[...cats];u[i]={...u[i],name:ecName};onUpdateConfig({...config,categories:u});setEditCatId(null);}if(e.key==="Escape")setEditCatId(null);}} autoFocus/><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>{const u=[...cats];u[i]={...u[i],name:ecName};onUpdateConfig({...config,categories:u});setEditCatId(null);}}>{"\u2713"}</button></div>
+            :<div style={{fontSize:13,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditCatId(c.id);setEcName(c.name);}}>{c.name}</div>}
+          </div>
+          {!isEd&&<div style={{display:"flex",gap:3}}>
+            <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>{
+              if(!window.confirm(`Delete "${c.name}" category? Existing tasks with this category won't be affected.`))return;
+              onUpdateConfig({...config,categories:cats.filter((_,j)=>j!==i)});
+            }}>{"\u2715"}</button>
+          </div>}
+        </div>;
+      })}
     </div>
 
     {/* Data Sources */}
