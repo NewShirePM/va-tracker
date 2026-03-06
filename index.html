@@ -1647,7 +1647,7 @@ function AdminQueuePanel({queue,covQ,data,onDeleteTask,onCompleteSubTask}){
             const st=vq.filter(t=>t.Source===src);
             if(!st.length)return null;
             const srcKey=`${va.Email}|${src}`;
-            const srcOpen=openSrc[srcKey]!==false; // default open
+            const srcOpen=!!openSrc[srcKey]; // default closed
             return<div key={src} style={{marginBottom:6}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${C.gray100}`,cursor:"pointer",userSelect:"none"}} onClick={()=>toggleSrc(srcKey)}>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
