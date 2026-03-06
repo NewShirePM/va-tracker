@@ -309,7 +309,6 @@ function App(){
         if(tasks.length>1){const gid=uid();tasks.forEach(t=>{t.GroupId=gid;});}
         toSave.push(...tasks);
       });
-      });
 
       // Save new daily tasks to SharePoint in background
       if(toSave.length>0){
