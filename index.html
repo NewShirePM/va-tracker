@@ -1613,6 +1613,7 @@ function AdminQueuePanel({queue,covQ,data,onDeleteTask,onCompleteSubTask}){
   const[openSrc,setOpenSrc]=useState({});
   const allQ=[...queue,...covQ];
   const total=allQ.length;
+  console.log("[VT] AdminQueuePanel allQ sample:",allQ.slice(0,3).map(t=>({Title:t.Title,VAEmail:t.VAEmail,Source:t.Source,GroupId:t.GroupId,PropertyId:t.PropertyId,PropertyName:t.PropertyName})));
 
   function toggleVA(email){setOpenVAs(p=>({...p,[email]:!p[email]}));}
   function toggleSrc(key){setOpenSrc(p=>({...p,[key]:!p[key]}));}
