@@ -1021,21 +1021,25 @@ function TaskGroupRow({tasks,onStartGroup,onDelete,onCompleteSubTask,showVA}){
 // ============================================================
 // HELPER — group tasks by GroupId for rendering
 // ============================================================
-function groupTasks(tasks){
-  const groups={};const singles=[];
+function groupTasks(tasks,allowFallback=false){
+  const groups={};
   tasks.forEach(t=>{
-    if(t.GroupId){
-      if(!groups[t.GroupId])groups[t.GroupId]=[];
-      groups[t.GroupId].push(t);
-    }else{singles.push(t);}
+    // Group by GroupId if present, OR by Title+VAEmail+Source if multiple properties (fallback)
+    const key=t.GroupId||(allowFallback&&t.PropertyId?`fb|${t.VAEmail}|${t.Title}|${t.Source}`:null);
+    if(key){
+      if(!groups[key])groups[key]=[];
+      groups[key].push(t);
+    }
   });
-  // Return interleaved: each group rendered as one unit, singles as-is
-  // We return {type:"single",task} or {type:"group",tasks:[]}
   const result=[];
+  const seen=new Set();
   tasks.forEach(t=>{
-    if(!t.GroupId){result.push({type:"single",task:t});}
-    else if(groups[t.GroupId]&&!result.find(r=>r.type==="group"&&r.tasks[0].GroupId===t.GroupId)){
-      result.push({type:"group",tasks:groups[t.GroupId]});
+    const key=t.GroupId||(allowFallback&&t.PropertyId?`fb|${t.VAEmail}|${t.Title}|${t.Source}`:null);
+    if(!key||!groups[key]||groups[key].length<2){
+      result.push({type:"single",task:t});
+    } else if(!seen.has(key)){
+      seen.add(key);
+      result.push({type:"group",tasks:groups[key]});
     }
   });
   return result;
@@ -1657,9 +1661,9 @@ function AdminQueuePanel({queue,covQ,data,onDeleteTask,onCompleteSubTask}){
                 <span style={{fontSize:10,color:C.gray400}}>{srcOpen?"▲":"▼"}</span>
               </div>
               {srcOpen&&<div style={{paddingLeft:8,paddingTop:4}}>
-                {groupTasks(st).map((item,i)=>item.type==="single"
+                {groupTasks(st,true).map((item,i)=>item.type==="single"
                   ?<TaskRow key={item.task._localId} task={item.task} onDelete={onDeleteTask} onComplete={onCompleteSubTask}/>
-                  :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onDelete={onDeleteTask} onCompleteSubTask={onCompleteSubTask} showVA={false}/>
+                  :<TaskGroupRow key={item.tasks[0].GroupId||item.tasks[0]._localId} tasks={item.tasks} onDelete={onDeleteTask} onCompleteSubTask={onCompleteSubTask} showVA={false}/>
                 )}
               </div>}
             </div>;
