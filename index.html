@@ -170,6 +170,53 @@ async function safeGetRaw(token,url){
   return{status:r.status,body:text.slice(0,500)};
 }
 
+// Build SP fields for VA_Activity — omits optional columns that may not exist yet
+function actFields(t,extra={}){
+  const f={
+    Title:t.Title||"Untitled",
+    ActivityType:t.ActivityType||"Task",
+    VAEmail:t.VAEmail||"",
+    VAName:t.VAName||"",
+    ActivityDate:t.ActivityDate||new Date().toISOString(),
+    PropertyId:t.PropertyId||"",
+    PropertyName:t.PropertyName||"General",
+    PMName:t.PMName||"",
+    Category:t.Category||"Admin/Other",
+    Source:t.Source||"Ad-Hoc",
+    Status:t.Status||"Queued",
+    Priority:t.Priority||"Normal",
+    StartTime:t.StartTime||null,
+    EndTime:t.EndTime||null,
+    DurationMin:t.DurationMin||0,
+    PausedMin:t.PausedMin||0,
+    Notes:t.Notes||"",
+    CoverageForEmail:t.CoverageForEmail||"",
+    CoverageForName:t.CoverageForName||"",
+    AssignedByEmail:t.AssignedByEmail||"",
+    AssignedByName:t.AssignedByName||"",
+    ...extra
+  };
+  // Only include GroupId if the column has been provisioned (non-empty value)
+  if(t.GroupId||extra.GroupId){f.GroupId=t.GroupId||extra.GroupId;}
+  return f;
+}
+
+// Post to SP with auto-retry stripping unrecognized fields
+async function gPostActivity(token,fields){
+  try{
+    return await gPost(token,lUrl("VA_Activity"),fields);
+  }catch(e){
+    if(e.message.includes("not recognized")||e.message.includes("invalidRequest")){
+      // Strip any custom columns SP doesn't know about and retry
+      const safe={...fields};
+      delete safe.GroupId;
+      console.warn("[VT] Retrying without GroupId");
+      return await gPost(token,lUrl("VA_Activity"),safe);
+    }
+    throw e;
+  }
+}
+
 async function loadAll(token){
   const[eR,cR,pR,ptR,aR,gR]=await Promise.all([
     safeGet(token,"Employees",`${lUrl("Employees")}?expand=fields&$top=200`),
@@ -179,15 +226,6 @@ async function loadAll(token){
     safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=500`),
     safeGet(token,"Guests",`${lUrl("VA_Guests")}?expand=fields&$top=200`),
   ]);
-  // Diagnostic: raw fetch Activity to see actual response
-  try{
-    const raw=await fetch(`${lUrl("VA_Activity")}?expand=fields&$top=5`,{headers:{Authorization:`Bearer ${token}`}});
-    const rawJ=await raw.json();
-    console.log("[VT] Activity raw response status:",raw.status);
-    console.log("[VT] Activity raw keys:",Object.keys(rawJ));
-    if(rawJ.value) console.log("[VT] Activity value count:",rawJ.value.length,"first:",rawJ.value[0]?JSON.stringify(rawJ.value[0]).slice(0,200):"(empty)");
-    else console.log("[VT] Activity no value key, error:",rawJ.error||rawJ);
-  }catch(e){console.error("[VT] Activity raw fetch error:",e.message);}
   const employees=eR.map(e=>({id:e.id,...e.fields}));
   const config=cR.length>0?JSON.parse(cR[0].fields.ConfigJSON||"{}"):{}; 
   const properties=pR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
@@ -277,13 +315,6 @@ function App(){
 
   function buildQueue(d,email){
     // 1. Load all persisted Queued tasks from VA_Activity
-    if(d.activities.length>0){
-      const samp=d.activities[0];
-      console.log("[VT] Sample activity fields:",Object.keys(samp));
-      console.log("[VT] Sample activity:",JSON.stringify(samp).slice(0,300));
-    } else {
-      console.warn("[VT] NO activities loaded - checking raw response");
-    }
     const persistedQueued=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&(a.Status==="Queued"||a.Status==="In Progress"));
     const q=[],cv=[];
     
@@ -333,7 +364,6 @@ function App(){
       });
 
       // Set base queue state FIRST, then background-save new tasks and append
-      console.log("[VT] buildQueue set:",{qLen:q.length,cvLen:cv.length,qSources:[...new Set(q.map(t=>t.Source))],qEmails:[...new Set(q.map(t=>t.VAEmail))],cvEmails:[...new Set(cv.map(t=>t.VAEmail))]});
       setQueue(q);setCovQ(cv);
 
       if(toSave.length>0){
@@ -341,7 +371,7 @@ function App(){
           try{
             const tk=await gT();
             for(const task of toSave){
-              const res=await gPost(tk,lUrl("VA_Activity"),{Title:task.Title,ActivityType:"Task",VAEmail:task.VAEmail,VAName:task.VAName,ActivityDate:task.ActivityDate,PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category,Source:task.Source,Status:task.Status,Priority:task.Priority||"Normal",CoverageForEmail:task.CoverageForEmail||"",CoverageForName:task.CoverageForName||"",GroupId:task.GroupId||""});
+              const res=await gPostActivity(tk,actFields(task));
               const saved={...task,_localId:res.id,_spId:res.id,id:res.id};
               if(task.Source==="Coverage"){setCovQ(p=>[...p,saved]);}
               else{setQueue(p=>[...p,saved]);}
@@ -351,7 +381,6 @@ function App(){
         })();
       }
     }else{
-      console.log("[VT] buildQueue(no recurring):",{qLen:q.length,cvLen:cv.length,qEmails:[...new Set(q.map(t=>t.VAEmail))]});
       setQueue(q);setCovQ(cv);
     }
   }
@@ -361,7 +390,7 @@ function App(){
   // ── Save task to SharePoint ──
   async function saveTask(task){
     const t=await gT();
-    return gPost(t,lUrl("VA_Activity"),{Title:task.Title,ActivityType:"Task",VAEmail:task.VAEmail,VAName:task.VAName,ActivityDate:task.ActivityDate||new Date().toISOString(),PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category,Source:task.Source,Status:task.Status,Priority:task.Priority||"Normal",StartTime:task.StartTime||null,EndTime:task.EndTime||null,DurationMin:task.DurationMin||0,PausedMin:task.PausedMin||0,Notes:task.Notes||"",CoverageForEmail:task.CoverageForEmail||"",CoverageForName:task.CoverageForName||"",AssignedByEmail:task.AssignedByEmail||"",AssignedByName:task.AssignedByName||"",GroupId:task.GroupId||""});
+    return gPostActivity(t,actFields(task));
   }
 
   // ── Save shift ──
@@ -442,7 +471,14 @@ function App(){
     if(t.GroupId){
       // Restore sibling sub-tasks from SP back to local queue
       try{
-        const siblings=await gAll(tk,`${lUrl("VA_Activity")}?$filter=fields/GroupId eq '${t.GroupId}' and fields/Status eq 'Queued'&expand=fields&$top=100`);
+        let siblings=[];
+        try{
+          siblings=await gAll(tk,`${lUrl("VA_Activity")}?$filter=fields/GroupId eq '${t.GroupId}' and fields/Status eq 'Queued'&expand=fields&$top=100`);
+        }catch(e){
+          // GroupId column may not exist yet — fall back to local queue state
+          console.warn("[VT] GroupId filter failed, using local state:",e.message);
+          siblings=queue.filter(x=>x.GroupId===t.GroupId&&x.Status==="Queued").map(x=>({id:x._spId,fields:x}));
+        }
         const restored=siblings.map(s=>({...s.fields,id:s.id,_localId:s.id,_spId:s.id}));
         setQueue(p=>[{...t,Status:"Queued",StartTime:null,_pMs:0,_pS:null},...restored,...p]);
       }catch{setQueue(p=>[{...t,Status:"Queued",StartTime:null,_pMs:0,_pS:null},...p]);}
@@ -503,7 +539,7 @@ function App(){
     }
     try{
       const tk=await gT();
-      const res=await gPost(tk,lUrl("VA_Activity"),{Title:t.Title,ActivityType:"Task",VAEmail:t.VAEmail,VAName:t.VAName,ActivityDate:t.ActivityDate,PropertyId:t.PropertyId||"",PropertyName:t.PropertyName||"General",PMName:t.PMName||"",Category:t.Category,Source:t.Source,Status:t.Status,Priority:t.Priority||"Normal",Notes:t.Notes||"",CoverageForEmail:t.CoverageForEmail||"",CoverageForName:t.CoverageForName||"",AssignedByEmail:t.AssignedByEmail||"",AssignedByName:t.AssignedByName||"",GroupId:t.GroupId||""});
+      const res=await gPostActivity(tk,actFields(t));
       const saved={...t,_localId:res.id,_spId:res.id,id:res.id};
       if(t.Source==="Coverage"){setCovQ(p=>[saved,...p]);fl(`${targetVa.Name} is OUT — task sent to coverage pool`);}
       else{setQueue(p=>[saved,...p]);fl("Task added!");}
@@ -528,7 +564,7 @@ function App(){
         Source:isOut?"Coverage":baseTask.Source,
         CoverageForEmail:isOut?targetVa.Email:"",
         CoverageForName:isOut?targetVa.Name:""};
-      const res=await gPost(tk,lUrl("VA_Activity"),{Title:t.Title,ActivityType:"Task",VAEmail:t.VAEmail,VAName:t.VAName,ActivityDate:t.ActivityDate,PropertyId:t.PropertyId||"",PropertyName:t.PropertyName||"General",PMName:t.PMName||"",Category:t.Category,Source:t.Source,Status:t.Status,Priority:t.Priority||"Normal",Notes:t.Notes||"",CoverageForEmail:t.CoverageForEmail||"",CoverageForName:t.CoverageForName||"",AssignedByEmail:t.AssignedByEmail||"",AssignedByName:t.AssignedByName||"",GroupId:groupId});
+      const res=await gPostActivity(tk,actFields(t,{GroupId:groupId}));
       saved.push({...t,_localId:res.id,_spId:res.id,id:res.id});
     }
     if(isOut){setCovQ(p=>[...saved,...p]);fl(`${targetVa.Name} is OUT — ${saved.length} tasks to coverage`);}
@@ -1012,7 +1048,6 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   const isAdm=role==="admin";
   const myTasks=isAdm?queue:queue.filter(t=>t.VAEmail&&t.VAEmail.toLowerCase()===myEmail);
-  console.log("[VT] MyTasksView:",{myEmail,queueLen:queue.length,myTasksLen:myTasks.length,allEmails:[...new Set(queue.map(t=>t.VAEmail))]});
   const daily=myTasks.filter(t=>t.Source==="Daily"||t.Source==="Weekly");
   const assigned=myTasks.filter(t=>t.Source==="Assigned"||t.Source==="Coverage");
   const adhoc=myTasks.filter(t=>t.Source==="Ad-Hoc");
@@ -1370,6 +1405,25 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
             <label style={{display:"flex",alignItems:"center",gap:6,padding:"3px 0",fontSize:12,color:C.gray400,cursor:"pointer",borderBottom:`1px solid ${C.gray100}`}}><input type="checkbox" checked={rProps.length===0} onChange={()=>setRProps([])}/>General</label>
             {(rVa?vaProps(rVa):data.properties).map(p=><label key={p.Title} style={{display:"flex",alignItems:"center",gap:6,padding:"3px 0",fontSize:12,color:C.teal700,cursor:"pointer"}}><input type="checkbox" checked={rProps.includes(p.Title)} onChange={()=>toggleRProp(p.Title)}/>{p.PropertyName}</label>)}
           </div>
+        </div>
+        <div style={{...S.row,marginTop:10}}>
+          <div style={{flex:1,minWidth:100}}><label style={S.label}>Frequency</label>
+            <select style={S.select} value={rFreq} onChange={e=>setRFreq(e.target.value)}>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          </div>
+          {rFreq==="weekly"&&<div style={{flex:1,minWidth:120}}><label style={S.label}>Day of Week</label>
+            <select style={S.select} value={rDay} onChange={e=>setRDay(Number(e.target.value))}>
+              <option value={1}>Monday</option>
+              <option value={2}>Tuesday</option>
+              <option value={3}>Wednesday</option>
+              <option value={4}>Thursday</option>
+              <option value={5}>Friday</option>
+              <option value={6}>Saturday</option>
+              <option value={0}>Sunday</option>
+            </select>
+          </div>}
         </div>
         <div style={{marginTop:10,marginBottom:6}}><label style={S.label}>Description *</label><input style={S.input} value={rDesc} onChange={e=>setRDesc(e.target.value)} placeholder="e.g., Check AppFolio for new work orders"/></div>
         <div style={{marginBottom:10}}><label style={S.label}>Icon — selected: <span style={{fontSize:18}}>{ICON_MAP[rIcon]||"\u{1F4C1}"}</span></label><div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:4,border:`1px solid ${C.gray200}`,borderRadius:4,padding:6,background:C.white,maxHeight:90,overflowY:"auto"}}>{ICON_OPTIONS.map(opt=><button key={opt.v} title={opt.l} style={{fontSize:16,padding:"2px 4px",background:rIcon===opt.v?C.teal100:"transparent",border:`1px solid ${rIcon===opt.v?C.teal500:"transparent"}`,borderRadius:3,cursor:"pointer",lineHeight:1}} onClick={()=>setRIcon(opt.v)}>{ICON_MAP[opt.v]}</button>)}</div></div>
