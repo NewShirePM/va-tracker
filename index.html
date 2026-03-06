@@ -170,7 +170,7 @@ async function loadAll(token){
     safeGet(token,"Config",`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
     safeGet(token,"Properties",`${lUrl("VA_Properties")}?expand=fields&$top=200`),
     safeGet(token,"Portfolios",`${lUrl("VA_Portfolios")}?expand=fields&$top=200`),
-    safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=200`),
+    safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=500`),
     safeGet(token,"Guests",`${lUrl("VA_Guests")}?expand=fields&$top=200`),
   ]);
   const employees=eR.map(e=>({id:e.id,...e.fields}));
@@ -310,7 +310,9 @@ function App(){
         toSave.push(...tasks);
       });
 
-      // Save new daily tasks to SharePoint in background
+      // Set base queue state FIRST, then background-save new tasks and append
+      setQueue(q);setCovQ(cv);
+
       if(toSave.length>0){
         (async()=>{
           try{
@@ -325,9 +327,9 @@ function App(){
           }catch(e){console.error("[VT] Daily task generation error:",e);}
         })();
       }
+    }else{
+      setQueue(q);setCovQ(cv);
     }
-
-    setQueue(q);setCovQ(cv);
   }
 
   async function reload(){const t=await gT();const d=await loadAll(t);setData(d);buildQueue(d,myEmail);return d;}
@@ -1505,19 +1507,80 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
     </div>
 
     {/* Queued Task Management */}
-    {queue.length>0&&<div style={S.card}>
-      <div style={S.cardTitle}>{"\u{1F5D1}\u{FE0F}"} Queued Tasks ({queue.length})</div>
-      <div style={{fontSize:12,color:C.gray400,marginBottom:10}}>Remove tasks that should no longer be in the queue.</div>
-      {data.vas.map(va=>{const vq=queue.filter(t=>t.VAEmail?.toLowerCase()===va.Email.toLowerCase());if(!vq.length)return null;
-        return<div key={va.Email} style={{marginBottom:10}}><div style={{fontSize:12,fontWeight:600,color:C.teal600,textTransform:"uppercase",marginBottom:4}}>{va.Name} ({vq.length})</div>
-          {groupTasks(vq).map((item,i)=>item.type==="single"
-            ?<TaskRow key={item.task._localId} task={item.task} onDelete={onDeleteTask} onComplete={onCompleteSubTask}/>
-            :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onDelete={onDeleteTask} onCompleteSubTask={onCompleteSubTask} showVA={false}/>
-          )}</div>;})}
-    </div>}
+    {queue.length>0&&<AdminQueuePanel queue={queue} covQ={covQ} data={data} onDeleteTask={onDeleteTask} onCompleteSubTask={onCompleteSubTask}/>}
 
     {/* Close Day */}
     <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><button style={S.btn(C.warning,C.dark)} onClick={onCloseDay}>Close Day</button></div></div>
+  </div>);
+}
+
+
+// ============================================================
+// ADMIN QUEUE PANEL — collapsible by VA, then by source type
+// ============================================================
+function AdminQueuePanel({queue,covQ,data,onDeleteTask,onCompleteSubTask}){
+  const[openVAs,setOpenVAs]=useState({});
+  const[openSrc,setOpenSrc]=useState({});
+  const allQ=[...queue,...covQ];
+  const total=allQ.length;
+
+  function toggleVA(email){setOpenVAs(p=>({...p,[email]:!p[email]}));}
+  function toggleSrc(key){setOpenSrc(p=>({...p,[key]:!p[key]}));}
+
+  const srcOrder=["Daily","Weekly","Assigned","Ad-Hoc","Coverage"];
+  const srcColors={Daily:C.teal600,Weekly:C.info,Assigned:C.gold700,"Ad-Hoc":C.gray400,Coverage:C.warning};
+
+  return(<div style={S.card}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
+      <div style={{...S.cardTitle,margin:0}}>{"\u{1F5D1}\u{FE0F}"} Queued Tasks ({total})</div>
+      <div style={{display:"flex",gap:6}}>
+        <button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,fontSize:10}} onClick={()=>{const o={};data.vas.forEach(v=>o[v.Email]=true);setOpenVAs(o);}}>Expand All</button>
+        <button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm,fontSize:10}} onClick={()=>setOpenVAs({})}>Collapse All</button>
+      </div>
+    </div>
+    {data.vas.map(va=>{
+      const vq=allQ.filter(t=>t.VAEmail?.toLowerCase()===va.Email.toLowerCase());
+      if(!vq.length)return null;
+      const isOpen=!!openVAs[va.Email];
+      const daily=vq.filter(t=>t.Source==="Daily"||t.Source==="Weekly");
+      const other=vq.filter(t=>t.Source!=="Daily"&&t.Source!=="Weekly");
+      return<div key={va.Email} style={{marginBottom:6,border:`1px solid ${C.gray200}`,borderRadius:5,overflow:"hidden"}}>
+        {/* VA header row — clickable */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",background:C.teal50,cursor:"pointer",userSelect:"none"}} onClick={()=>toggleVA(va.Email)}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.teal700}}>{va.Name}</span>
+            <span style={{fontSize:11,color:C.gray400}}>{vq.length} pending</span>
+            {daily.length>0&&<span style={{fontSize:10,padding:"1px 6px",borderRadius:99,background:C.teal100,color:C.teal700,fontWeight:600}}>{daily.length} daily</span>}
+            {other.length>0&&<span style={{fontSize:10,padding:"1px 6px",borderRadius:99,background:C.gold100,color:C.gold700,fontWeight:600}}>{other.length} assigned</span>}
+          </div>
+          <span style={{fontSize:12,color:C.gray400}}>{isOpen?"▲":"▼"}</span>
+        </div>
+        {/* VA body — source-grouped */}
+        {isOpen&&<div style={{padding:"8px 12px"}}>
+          {srcOrder.map(src=>{
+            const st=vq.filter(t=>t.Source===src);
+            if(!st.length)return null;
+            const srcKey=`${va.Email}|${src}`;
+            const srcOpen=openSrc[srcKey]!==false; // default open
+            return<div key={src} style={{marginBottom:6}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${C.gray100}`,cursor:"pointer",userSelect:"none"}} onClick={()=>toggleSrc(srcKey)}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontSize:10,fontWeight:700,color:srcColors[src]||C.gray400,textTransform:"uppercase",letterSpacing:"0.05em"}}>{src}</span>
+                  <span style={{fontSize:10,color:C.gray400}}>({st.length})</span>
+                </div>
+                <span style={{fontSize:10,color:C.gray400}}>{srcOpen?"▲":"▼"}</span>
+              </div>
+              {srcOpen&&<div style={{paddingLeft:8,paddingTop:4}}>
+                {groupTasks(st).map((item,i)=>item.type==="single"
+                  ?<TaskRow key={item.task._localId} task={item.task} onDelete={onDeleteTask} onComplete={onCompleteSubTask}/>
+                  :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onDelete={onDeleteTask} onCompleteSubTask={onCompleteSubTask} showVA={false}/>
+                )}
+              </div>}
+            </div>;
+          })}
+        </div>}
+      </div>;
+    })}
   </div>);
 }
 
