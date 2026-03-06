@@ -162,7 +162,13 @@ function lUrl(n){return`${SITE}/lists/${n}/items`;}
 async function gRawPost(token,url,body){const r=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(body)});if(!r.ok){const t=await r.text();throw new Error(`POST ${r.status}: ${t}`);}return r.json();}
 function iUrl(n,id){return`${SITE}/lists/${n}/items/${id}/fields`;}
 
-async function safeGet(token,name,url){try{console.log(`[VT] Loading ${name}...`);const r=await gAll(token,url);console.log(`[VT] ${name}: ${r.length}`);return r;}catch(e){console.warn(`[VT] ${name} failed: ${e.message}`);return[];}}
+async function safeGet(token,name,url){try{console.log(`[VT] Loading ${name}...`);const r=await gAll(token,url);console.log(`[VT] ${name}: ${r.length}`);return r;}catch(e){console.error(`[VT] ${name} FAILED: ${e.message}`,url);return[];}}
+
+async function safeGetRaw(token,url){
+  const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+  const text=await r.text();
+  return{status:r.status,body:text.slice(0,500)};
+}
 
 async function loadAll(token){
   const[eR,cR,pR,ptR,aR,gR]=await Promise.all([
@@ -173,6 +179,15 @@ async function loadAll(token){
     safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=500`),
     safeGet(token,"Guests",`${lUrl("VA_Guests")}?expand=fields&$top=200`),
   ]);
+  // Diagnostic: raw fetch Activity to see actual response
+  try{
+    const raw=await fetch(`${lUrl("VA_Activity")}?expand=fields&$top=5`,{headers:{Authorization:`Bearer ${token}`}});
+    const rawJ=await raw.json();
+    console.log("[VT] Activity raw response status:",raw.status);
+    console.log("[VT] Activity raw keys:",Object.keys(rawJ));
+    if(rawJ.value) console.log("[VT] Activity value count:",rawJ.value.length,"first:",rawJ.value[0]?JSON.stringify(rawJ.value[0]).slice(0,200):"(empty)");
+    else console.log("[VT] Activity no value key, error:",rawJ.error||rawJ);
+  }catch(e){console.error("[VT] Activity raw fetch error:",e.message);}
   const employees=eR.map(e=>({id:e.id,...e.fields}));
   const config=cR.length>0?JSON.parse(cR[0].fields.ConfigJSON||"{}"):{}; 
   const properties=pR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
@@ -262,9 +277,13 @@ function App(){
 
   function buildQueue(d,email){
     // 1. Load all persisted Queued tasks from VA_Activity
-    console.log("[VT] First activity raw:",d.activities[0]);
-    console.log("[VT] Activity types:",[...new Set(d.activities.map(a=>a.ActivityType))]);
-    console.log("[VT] Activity statuses:",[...new Set(d.activities.map(a=>a.Status))]);
+    if(d.activities.length>0){
+      const samp=d.activities[0];
+      console.log("[VT] Sample activity fields:",Object.keys(samp));
+      console.log("[VT] Sample activity:",JSON.stringify(samp).slice(0,300));
+    } else {
+      console.warn("[VT] NO activities loaded - checking raw response");
+    }
     const persistedQueued=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&(a.Status==="Queued"||a.Status==="In Progress"));
     const q=[],cv=[];
     
