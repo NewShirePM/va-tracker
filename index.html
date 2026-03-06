@@ -107,30 +107,34 @@ const stBadge={Completed:"success",Blocked:"error","In Progress":"warning",Queue
 const srcBadge={Daily:"info",Assigned:"warning","Ad-Hoc":"neutral",Coverage:"warning"};
 const catIcon={"Work Orders":"\u{1F527}",Marketing:"\u{1F4E2}","Tenant Comms":"\u{1F4AC}",Reporting:"\u{1F4CA}",Inspections:"\u{1F50D}",Renewals:"\u{1F4DD}",Accounts:"\u{1F4B0}","Admin/Other":"\u{1F4C1}"};
 const ICON_MAP={
-  wrench:"\u{1F527}",megaphone:"\u{1F4E2}",chat:"\u{1F4AC}",chart:"\u{1F4CA}",search:"\u{1F50D}",
-  document:"\u{1F4DD}",money:"\u{1F4B0}",folder:"\u{1F4C1}",key:"\u{1F511}",house:"\u{1F3E0}",
-  handshake:"\u{1F91D}",clipboard:"\u{1F4CB}",phone:"\u{1F4DE}",email:"\u{1F4E7}",
-  star:"\u{2B50}",calendar:"\u{1F4C5}",clock:"\u{1F551}",checkmark:"\u{2705}",
-  warning:"\u{26A0}\u{FE0F}",lock:"\u{1F512}",person:"\u{1F464}",people:"\u{1F465}",
-  building:"\u{1F3E2}",tools:"\u{1F6E0}\u{FE0F}",truck:"\u{1F69A}",paint:"\u{1F3A8}",
-  tree:"\u{1F333}",water:"\u{1F4A7}",electric:"\u{26A1}",trash:"\u{1F5D1}\u{FE0F}",
-  lease:"\u{1F4C4}",camera:"\u{1F4F7}",computer:"\u{1F4BB}",package:"\u{1F4E6}",
-  bank:"\u{1F3E6}",receipt:"\u{1F9FE}",tag:"\u{1F3F7}\u{FE0F}",fire:"\u{1F525}",
-  clean:"\u{1F9F9}",move:"\u{1F4E6}",pet:"\u{1F43E}",parking:"\u{1F17F}\u{FE0F}",
+  // Leasing
+  lease:"\u{1F4C4}",handshake:"\u{1F91D}",calendar:"\u{1F4C5}",search:"\u{1F50D}",
+  key:"\u{1F511}",people:"\u{1F465}",person:"\u{1F464}",
+  // Resident Relations
+  chat:"\u{1F4AC}",phone:"\u{1F4DE}",email:"\u{1F4E7}",megaphone:"\u{1F4E2}",
+  star:"\u{2B50}",
+  // Admin / Reporting
+  clipboard:"\u{1F4CB}",document:"\u{1F4DD}",folder:"\u{1F4C1}",chart:"\u{1F4CA}",
+  receipt:"\u{1F9FE}",money:"\u{1F4B0}",bank:"\u{1F3E6}",computer:"\u{1F4BB}",
+  clock:"\u{1F551}",checkmark:"\u{2705}",lock:"\u{1F512}",package:"\u{1F4E6}",
+  // Urgent
+  urgent:"\u{1F6A8}",
 };
 const ICON_OPTIONS=[
-  {v:"wrench",l:"Wrench"},{v:"tools",l:"Tools"},{v:"paint",l:"Paint/Design"},{v:"clean",l:"Cleaning"},
-  {v:"fire",l:"Fire/Urgent"},{v:"electric",l:"Electric"},{v:"water",l:"Water/Plumbing"},{v:"trash",l:"Trash"},
-  {v:"tree",l:"Landscaping"},{v:"truck",l:"Truck/Move"},{v:"building",l:"Building"},{v:"house",l:"House"},
-  {v:"parking",l:"Parking"},{v:"key",l:"Key/Access"},{v:"lock",l:"Lock/Security"},
-  {v:"megaphone",l:"Marketing"},{v:"chat",l:"Comms/Chat"},{v:"phone",l:"Phone"},{v:"email",l:"Email"},
-  {v:"people",l:"People/Team"},{v:"person",l:"Person"},{v:"handshake",l:"Handshake"},
-  {v:"document",l:"Document"},{v:"lease",l:"Lease"},{v:"clipboard",l:"Clipboard"},{v:"folder",l:"Folder"},
-  {v:"package",l:"Package"},{v:"receipt",l:"Receipt"},{v:"bank",l:"Bank/Finance"},{v:"money",l:"Money"},
-  {v:"chart",l:"Chart/Report"},{v:"search",l:"Inspection"},{v:"camera",l:"Camera"},
-  {v:"calendar",l:"Calendar"},{v:"clock",l:"Clock/Time"},{v:"computer",l:"Computer"},
-  {v:"checkmark",l:"Checkmark"},{v:"star",l:"Star/Priority"},{v:"tag",l:"Tag"},
-  {v:"move",l:"Move In/Out"},{v:"pet",l:"Pet"},{v:"warning",l:"Warning"},
+  // Leasing
+  {v:"lease",l:"Lease / App"},{v:"handshake",l:"Showing / Tour"},{v:"calendar",l:"Scheduling"},
+  {v:"search",l:"Screening"},{v:"key",l:"Move-In Coord"},{v:"people",l:"Prospects"},
+  {v:"person",l:"Applicant"},
+  // Resident Relations
+  {v:"chat",l:"Resident Comms"},{v:"phone",l:"Phone Call"},{v:"email",l:"Email"},
+  {v:"megaphone",l:"Announcements"},{v:"star",l:"Reviews / Satisfaction"},
+  // Admin / Reporting
+  {v:"clipboard",l:"Task / Checklist"},{v:"document",l:"Document"},{v:"folder",l:"Admin / Other"},
+  {v:"chart",l:"Reporting"},{v:"receipt",l:"Invoices / Billing"},{v:"money",l:"Accounts"},
+  {v:"bank",l:"Finance"},{v:"computer",l:"AppFolio / Software"},{v:"clock",l:"Follow-Up"},
+  {v:"checkmark",l:"Completed Item"},{v:"lock",l:"Access / Security"},{v:"package",l:"Packages"},
+  // Urgent
+  {v:"urgent",l:"URGENT"},
 ];
 function getIcon(iconKey,catName){return ICON_MAP[iconKey]||catIcon[catName]||"\u{1F4C1}";}
 
