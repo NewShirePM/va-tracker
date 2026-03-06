@@ -156,8 +156,8 @@ function inRange(d,from,to){if(!d)return false;const t=new Date(d).getTime();ret
 // ============================================================
 async function gGet(token,url){const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error(`GET ${r.status}`);return r.json();}
 async function gAll(token,url){let a=[],n=url;while(n){const d=await gGet(token,n);a=a.concat(d.value||[]);n=d["@odata.nextLink"]||null;}return a;}
-async function gPost(token,url,fields){const r=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify({fields})});if(!r.ok)throw new Error(`POST ${r.status}`);return r.json();}
-async function gPatch(token,url,fields){const r=await fetch(url,{method:"PATCH",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(fields)});if(!r.ok)throw new Error(`PATCH ${r.status}`);return r.json();}
+async function gPost(token,url,fields){const r=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify({fields})});if(!r.ok){let errBody="";try{const ej=await r.json();errBody=JSON.stringify(ej?.error||ej).slice(0,300);}catch{}throw new Error(`POST ${r.status}: ${errBody}`);}return r.json();}
+async function gPatch(token,url,fields){const r=await fetch(url,{method:"PATCH",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(fields)});if(!r.ok){let errBody="";try{const ej=await r.json();errBody=JSON.stringify(ej?.error||ej).slice(0,300);}catch{}throw new Error(`PATCH ${r.status}: ${errBody}`);}return r.json();}
 function lUrl(n){return`${SITE}/lists/${n}/items`;}
 async function gRawPost(token,url,body){const r=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(body)});if(!r.ok){const t=await r.text();throw new Error(`POST ${r.status}: ${t}`);}return r.json();}
 function iUrl(n,id){return`${SITE}/lists/${n}/items/${id}/fields`;}
