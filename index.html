@@ -116,6 +116,7 @@ function fTm(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60;con
 function today(){return new Date().toISOString().slice(0,10);}
 function dAgo(d){return Math.floor((Date.now()-new Date(d).getTime())/864e5);}
 function uid(){return Date.now()+"-"+Math.random().toString(36).slice(2,6);}
+function sortCats(cats){if(!cats)return[];const other=cats.filter(c=>c.name==="Admin/Other");const rest=cats.filter(c=>c.name!=="Admin/Other").sort((a,b)=>a.name.localeCompare(b.name));return[...rest,...other];}
 function inRange(d,from,to){if(!d)return false;const t=new Date(d).getTime();return t>=new Date(from).getTime()&&t<=new Date(to).getTime()+864e5;}
 
 // ============================================================
@@ -684,7 +685,7 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
     {/* Add Task */}
     <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:14,fontWeight:600,color:C.teal700}}>➕ Add Task</div><button style={S.btnO(C.teal700,C.teal100)} onClick={()=>setShowForm(!showForm)}>{showForm?"Cancel":"New"}</button></div>
       {showForm&&<div style={{marginTop:14}}>
-        <div style={S.row}><div style={{flex:1,minWidth:130}}><label style={S.label}>Category *</label><select style={S.select} value={fCat} onChange={e=>setFCat(e.target.value)}><option value="">...</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+        <div style={S.row}><div style={{flex:1,minWidth:130}}><label style={S.label}>Category *</label><select style={S.select} value={fCat} onChange={e=>setFCat(e.target.value)}><option value="">...</option>{sortCats(cats).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div style={{flex:1,minWidth:130}}><label style={S.label}>Property</label><select style={S.select} value={fProp} onChange={e=>setFProp(e.target.value)}><option value="">General</option>{portProps.map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}</select></div>
           <div style={{minWidth:80}}><label style={S.label}>Priority</label><select style={S.select} value={fPri} onChange={e=>setFPri(e.target.value)}><option>Normal</option><option>High</option><option>Urgent</option></select></div></div>
         <div style={{marginTop:10,marginBottom:10}}><label style={S.label}>Task *</label><input style={S.input} value={fDesc} onChange={e=>setFDesc(e.target.value)} placeholder="Describe..."/></div>
@@ -769,7 +770,7 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
           </select>
         </div>
         <div style={{flex:1,minWidth:150}}><label style={S.label}>Category *</label>
-          <select style={S.select} value={tCat} onChange={e=>setTCat(e.target.value)}><option value="">Select...</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+          <select style={S.select} value={tCat} onChange={e=>setTCat(e.target.value)}><option value="">Select...</option>{sortCats(cats).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
         </div>
         <div style={{minWidth:80}}><label style={S.label}>Priority</label><select style={S.select} value={tPri} onChange={e=>setTPri(e.target.value)}><option>Normal</option><option>High</option><option>Urgent</option></select></div>
       </div>
@@ -854,8 +855,8 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps}){
 // ADMIN VIEW
 // ============================================================
 function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty}){
-  const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aProp,setAProp]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
-  const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rProp,setRProp]=useState("");const[rDesc,setRDesc]=useState("");
+  const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
+  const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
   const[portVa,setPortVa]=useState("");const[portProp,setPortProp]=useState("");
   const[showAddProp,setShowAddProp]=useState(false);const[npName,setNpName]=useState("");const[npGroup,setNpGroup]=useState("Multifamily");const[npUnits,setNpUnits]=useState("");const[npPm,setNpPm]=useState("");
@@ -867,15 +868,31 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   if(!data)return null;
   const cats=config?.categories||[];const rTasks=config?.recurringTasks||[];
 
-  function handleAssign(){if(!aVa||!aCat||!aDesc)return;const va=data.vas.find(v=>v.Email===aVa);const cat=cats.find(c=>c.id===aCat);const prop=aProp?data.properties.find(p=>p.Title===aProp):null;
-    onAssignTask({Title:aDesc,VAEmail:aVa,VAName:va?.Name||aVa,PropertyId:aProp||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Priority:aPri,Source:"Assigned",AssignedByEmail:myEmail,AssignedByName:acct?.name||myEmail,Notes:aNotes});
-    setADesc("");setAVa("");setACat("");setAProp("");setAPri("Normal");setANotes("");setShowAssign(false);}
+  // Get properties for a specific VA
+  function vaProps(email){if(!email)return data.properties;return data.properties.filter(p=>data.portfolios.some(pt=>pt.VAEmail?.toLowerCase()===email.toLowerCase()&&pt.PropertyId===p.Title));}
+  const sCats=sortCats(cats);
+  // Multi-property state for assign
+  const[aProps,setAProps]=useState([]);
+  function toggleAProp(id){setAProps(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);}
 
-  async function saveRec(nrt){await onUpdateConfig({...config,recurringTasks:nrt});}
-  function toggleRec(i){const u=[...rTasks];u[i]={...u[i],active:!u[i].active};saveRec(u);}
-  function deleteRec(i){if(!window.confirm("Delete?"))return;saveRec(rTasks.filter((_,j)=>j!==i));}
-  function addRec(){if(!rVa||!rCat||!rDesc)return;saveRec([...rTasks,{vaEmail:rVa,category:rCat,description:rDesc,propertyId:rProp||"",active:true}]);setRDesc("");setRVa("");setRCat("");setRProp("");setShowRec(false);}
-  function saveEdit(i){const u=[...rTasks];u[i]={...u[i],description:editDesc};saveRec(u);setEditIdx(null);}
+  function handleAssign(){if(!aVa||!aCat||!aDesc)return;const va=data.vas.find(v=>v.Email===aVa);const cat=cats.find(c=>c.id===aCat);
+    const propList=aProps.length>0?aProps:[""];// empty string = General
+    propList.forEach(pid=>{const prop=pid?data.properties.find(p=>p.Title===pid):null;
+      onAssignTask({Title:aDesc,VAEmail:aVa,VAName:va?.Name||aVa,PropertyId:pid||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Priority:aPri,Source:"Assigned",AssignedByEmail:myEmail,AssignedByName:acct?.name||myEmail,Notes:aNotes});
+    });
+    setADesc("");setAVa("");setACat("");setAProps([]);setAPri("Normal");setANotes("");setShowAssign(false);}
+
+  // Multi-property for recurring
+  const[rProps,setRProps]=useState([]);
+  function toggleRProp(id){setRProps(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);}
+
+  function addRec(){if(!rVa||!rCat||!rDesc)return;
+    const propList=rProps.length>0?rProps:[""];
+    const newTasks=propList.map(pid=>({vaEmail:rVa,category:rCat,description:rDesc,propertyId:pid,active:true}));
+    saveRec([...rTasks,...newTasks]);setRDesc("");setRVa("");setRCat("");setRProps([]);setShowRec(false);}
+
+  // Duplicate recurring task for different VA
+  function duplicateRec(i){const r=rTasks[i];setRVa("");setRCat(r.category);setRDesc(r.description);setRProps(r.propertyId?[r.propertyId]:[]);setShowRec(true);}
 
   return(<div>
     {/* Absence */}
@@ -891,11 +908,18 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
     <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CC}"} Assign Task</div></div><button style={S.btn(C.gold500,C.dark)} onClick={()=>setShowAssign(!showAssign)}>{showAssign?"Cancel":"Assign"}</button></div>
       {showAssign&&<div style={{marginTop:14}}>
-        <div style={S.row}><div style={{flex:1,minWidth:140}}><label style={S.label}>VA *</label><select style={S.select} value={aVa} onChange={e=>setAVa(e.target.value)}><option value="">Select...</option>{data.vas.filter(v=>v.VATrackerStatus!=="Out").map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div><div style={{flex:1,minWidth:140}}><label style={S.label}>Category *</label><select style={S.select} value={aCat} onChange={e=>setACat(e.target.value)}><option value="">Select...</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
-        <div style={{...S.row,marginTop:10}}><div style={{flex:1,minWidth:140}}><label style={S.label}>Property</label><select style={S.select} value={aProp} onChange={e=>setAProp(e.target.value)}><option value="">General</option>{data.properties.map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}</select></div><div style={{minWidth:80}}><label style={S.label}>Priority</label><select style={S.select} value={aPri} onChange={e=>setAPri(e.target.value)}><option>Normal</option><option>High</option><option>Urgent</option></select></div></div>
+        <div style={S.row}><div style={{flex:1,minWidth:140}}><label style={S.label}>VA *</label><select style={S.select} value={aVa} onChange={e=>{setAVa(e.target.value);setAProps([]);}}><option value="">Select...</option>{data.vas.filter(v=>v.VATrackerStatus!=="Out").map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
+          <div style={{flex:1,minWidth:140}}><label style={S.label}>Category *</label><select style={S.select} value={aCat} onChange={e=>setACat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
+        <div style={{marginTop:10}}><label style={S.label}>Properties {aProps.length>0&&`(${aProps.length} selected)`}</label>
+          <div style={{border:`1px solid ${C.gray200}`,borderRadius:4,padding:8,maxHeight:160,overflowY:"auto",background:C.white}}>
+            <label style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:13,color:C.gray400,cursor:"pointer",borderBottom:`1px solid ${C.gray100}`}}><input type="checkbox" checked={aProps.length===0} onChange={()=>setAProps([])}/>General (no specific property)</label>
+            {(aVa?vaProps(aVa):data.properties).map(p=><label key={p.Title} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:13,color:C.teal700,cursor:"pointer"}}><input type="checkbox" checked={aProps.includes(p.Title)} onChange={()=>toggleAProp(p.Title)}/>{p.PropertyName} ({p.Units}u)</label>)}
+          </div>
+        </div>
+        <div style={{...S.row,marginTop:10}}><div style={{flex:1}}><label style={S.label}>Priority</label><select style={S.select} value={aPri} onChange={e=>setAPri(e.target.value)}><option>Normal</option><option>High</option><option>Urgent</option></select></div></div>
         <div style={{marginTop:10}}><label style={S.label}>Task *</label><input style={S.input} value={aDesc} onChange={e=>setADesc(e.target.value)} placeholder="What needs to be done..."/></div>
         <div style={{marginTop:8}}><label style={S.label}>Notes</label><input style={S.input} value={aNotes} onChange={e=>setANotes(e.target.value)} placeholder="Context for the VA (optional)"/></div>
-        <button style={{...S.btn(C.headerBg),width:"100%",marginTop:10}} onClick={handleAssign}>{"\u{1F4CC}"} Add to Queue</button>
+        <button style={{...S.btn(C.headerBg),width:"100%",marginTop:10}} onClick={handleAssign}>{"\u{1F4CC}"} {aProps.length>1?`Add ${aProps.length} Tasks`:"Add to Queue"}</button>
       </div>}
     </div>
 
@@ -903,16 +927,27 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
     <div style={S.card}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Recurring Daily Tasks</div><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={()=>setShowRec(!showRec)}>{showRec?"Cancel":"+ Add"}</button></div>
       {showRec&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
-        <div style={S.row}><div style={{flex:1,minWidth:130}}><label style={S.label}>VA *</label><select style={S.select} value={rVa} onChange={e=>setRVa(e.target.value)}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div><div style={{flex:1,minWidth:130}}><label style={S.label}>Category *</label><select style={S.select} value={rCat} onChange={e=>setRCat(e.target.value)}><option value="">Select...</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div><div style={{flex:1,minWidth:130}}><label style={S.label}>Property</label><select style={S.select} value={rProp} onChange={e=>setRProp(e.target.value)}><option value="">General</option>{data.properties.map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}</select></div></div>
+        <div style={S.row}><div style={{flex:1,minWidth:130}}><label style={S.label}>VA *</label><select style={S.select} value={rVa} onChange={e=>{setRVa(e.target.value);setRProps([]);}}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
+          <div style={{flex:1,minWidth:130}}><label style={S.label}>Category *</label><select style={S.select} value={rCat} onChange={e=>setRCat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
+        <div style={{marginTop:10}}><label style={S.label}>Properties {rProps.length>0&&`(${rProps.length} selected)`}</label>
+          <div style={{border:`1px solid ${C.gray200}`,borderRadius:4,padding:8,maxHeight:140,overflowY:"auto",background:C.white}}>
+            <label style={{display:"flex",alignItems:"center",gap:6,padding:"3px 0",fontSize:12,color:C.gray400,cursor:"pointer",borderBottom:`1px solid ${C.gray100}`}}><input type="checkbox" checked={rProps.length===0} onChange={()=>setRProps([])}/>General</label>
+            {(rVa?vaProps(rVa):data.properties).map(p=><label key={p.Title} style={{display:"flex",alignItems:"center",gap:6,padding:"3px 0",fontSize:12,color:C.teal700,cursor:"pointer"}}><input type="checkbox" checked={rProps.includes(p.Title)} onChange={()=>toggleRProp(p.Title)}/>{p.PropertyName}</label>)}
+          </div>
+        </div>
         <div style={{marginTop:10,marginBottom:10}}><label style={S.label}>Description *</label><input style={S.input} value={rDesc} onChange={e=>setRDesc(e.target.value)} placeholder="e.g., Check AppFolio for new work orders"/></div>
-        <button style={{...S.btn(C.success),width:"100%"}} onClick={addRec}>{"\u2713"} Add</button></div>}
+        <button style={{...S.btn(C.success),width:"100%"}} onClick={addRec}>{"\u2713"} {rProps.length>1?`Add ${rProps.length} Tasks`:"Add"}</button></div>}
       {data.vas.map(va=>{const vr=rTasks.map((r,i)=>({...r,_i:i})).filter(r=>r.vaEmail?.toLowerCase()===va.Email.toLowerCase());if(!vr.length)return null;
         return<div key={va.Email} style={{marginBottom:12}}><div style={{fontSize:12,fontWeight:600,color:C.teal600,textTransform:"uppercase",marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${C.teal100}`}}>{va.Name} ({vr.filter(r=>r.active).length} active)</div>
-          {vr.map(r=>{const cat=cats.find(c=>c.id===r.category);const isEd=editIdx===r._i;
+          {vr.map(r=>{const cat=cats.find(c=>c.id===r.category);const prop=r.propertyId?data.properties.find(p=>p.Title===r.propertyId):null;const isEd=editIdx===r._i;
             return<div key={r._i} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 0",borderBottom:`1px solid ${C.gray100}`,opacity:r.active?1:0.5}}>
               <span>{catIcon[cat?.name]||"\u{1F4C1}"}</span>
-              <div style={{flex:1,minWidth:0}}>{isEd?<div style={{display:"flex",gap:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={editDesc} onChange={e=>setEditDesc(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveEdit(r._i);if(e.key==="Escape")setEditIdx(null);}} autoFocus/><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>saveEdit(r._i)}>{"\u2713"}</button></div>:<div style={{fontSize:12,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditIdx(r._i);setEditDesc(r.description);}}>{r.description}</div>}</div>
-              {!isEd&&<div style={{display:"flex",gap:3}}><button style={{...S.btnO(r.active?C.warning:C.success,r.active?C.warning:C.success),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>toggleRec(r._i)}>{r.active?"Pause":"On"}</button><button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>deleteRec(r._i)}>{"\u2715"}</button></div>}
+              <div style={{flex:1,minWidth:0}}>{isEd?<div style={{display:"flex",gap:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={editDesc} onChange={e=>setEditDesc(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveEdit(r._i);if(e.key==="Escape")setEditIdx(null);}} autoFocus/><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>saveEdit(r._i)}>{"\u2713"}</button></div>
+                :<div><div style={{fontSize:12,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditIdx(r._i);setEditDesc(r.description);}}>{r.description}</div>{prop&&<div style={{fontSize:10,color:C.gray400}}>{prop.PropertyName}</div>}</div>}</div>
+              {!isEd&&<div style={{display:"flex",gap:3}}>
+                <button style={{...S.btnO(C.info,C.info),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>duplicateRec(r._i)} title="Duplicate for another VA">{"\u{1F4CB}"}</button>
+                <button style={{...S.btnO(r.active?C.warning:C.success,r.active?C.warning:C.success),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>toggleRec(r._i)}>{r.active?"Pause":"On"}</button>
+                <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>deleteRec(r._i)}>{"\u2715"}</button></div>}
             </div>;})}</div>;})}
     </div>
 
@@ -987,19 +1022,19 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
           setNcName("");setNcIcon("folder");setShowAddCat(false);
         }}>{"\u2713"} Add Category</button>
       </div>}
-      {cats.map((c,i)=>{
+      {sortCats(cats).map((c,i)=>{const origIdx=cats.findIndex(x=>x.id===c.id);
         const iconMap={wrench:"\u{1F527}",megaphone:"\u{1F4E2}",chat:"\u{1F4AC}",chart:"\u{1F4CA}",search:"\u{1F50D}",document:"\u{1F4DD}",money:"\u{1F4B0}",folder:"\u{1F4C1}",key:"\u{1F511}",house:"\u{1F3E0}",handshake:"\u{1F91D}",clipboard:"\u{1F4CB}",phone:"\u{1F4DE}",email:"\u{1F4E7}"};
         const isEd=editCatId===c.id;
         return<div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:`1px solid ${C.gray100}`}}>
           <span style={{fontSize:16}}>{iconMap[c.icon]||catIcon[c.name]||"\u{1F4C1}"}</span>
           <div style={{flex:1}}>
-            {isEd?<div style={{display:"flex",gap:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={ecName} onChange={e=>setEcName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const u=[...cats];u[i]={...u[i],name:ecName};onUpdateConfig({...config,categories:u});setEditCatId(null);}if(e.key==="Escape")setEditCatId(null);}} autoFocus/><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>{const u=[...cats];u[i]={...u[i],name:ecName};onUpdateConfig({...config,categories:u});setEditCatId(null);}}>{"\u2713"}</button></div>
+            {isEd?<div style={{display:"flex",gap:4}}><input style={{...S.input,padding:"4px 8px",fontSize:12}} value={ecName} onChange={e=>setEcName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){const u=[...cats];u[origIdx]={...u[origIdx],name:ecName};onUpdateConfig({...config,categories:u});setEditCatId(null);}if(e.key==="Escape")setEditCatId(null);}} autoFocus/><button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>{const u=[...cats];u[origIdx]={...u[origIdx],name:ecName};onUpdateConfig({...config,categories:u});setEditCatId(null);}}>{"\u2713"}</button></div>
             :<div style={{fontSize:13,fontWeight:500,color:C.teal700,cursor:"pointer"}} onClick={()=>{setEditCatId(c.id);setEcName(c.name);}}>{c.name}</div>}
           </div>
           {!isEd&&<div style={{display:"flex",gap:3}}>
             <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>{
               if(!window.confirm(`Delete "${c.name}" category? Existing tasks with this category won't be affected.`))return;
-              onUpdateConfig({...config,categories:cats.filter((_,j)=>j!==i)});
+              onUpdateConfig({...config,categories:cats.filter((_,j)=>j!==origIdx)});
             }}>{"\u2715"}</button>
           </div>}
         </div>;
