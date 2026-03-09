@@ -275,7 +275,12 @@ function App(){
   const[myEmp,setMyEmp]=useState(null);
   const[flash,setFlash]=useState("");
   const[timers,setTimers]=useState([]);
-  const[shift,setShift]=useState(null);
+  const[shift,setShift]=useState(()=>{
+    try{
+      const saved=sessionStorage.getItem("va_shift_"+(window._vatEmail||""));
+      return saved?JSON.parse(saved):null;
+    }catch(e){return null;}
+  });
   const[covQ,setCovQ]=useState([]);
   const[queue,setQueue]=useState([]);
   const[tick,setTick]=useState(0);
@@ -284,6 +289,14 @@ function App(){
   const[dfTo,setDfTo]=useState(today());
 
   useEffect(()=>{const id=setInterval(()=>setTick(t=>t+1),1000);return()=>clearInterval(id);},[]);
+  // Restore persisted shift when email becomes known
+  useEffect(()=>{
+    if(!myEmail)return;
+    try{
+      const saved=sessionStorage.getItem("va_shift_"+myEmail);
+      if(saved&&!shift){const s=JSON.parse(saved);setShift(s);console.log("[VT] Restored shift from session",s.ClockIn);}
+    }catch(e){}
+  },[myEmail]);
   const fl=useCallback(msg=>{setFlash(msg);setTimeout(()=>setFlash(""),2500);},[]);
   async function gT(){return(await refresh())||token;}
 
@@ -294,6 +307,7 @@ function App(){
     if(!token||!acct)return;
     const email=acct.username.toLowerCase();
     console.log("[VT] MSAL user:",email);
+    window._vatEmail=email;
     setMyEmail(email);setLoading(true);
     loadAll(token).then(d=>{
       setData(d);
@@ -407,6 +421,24 @@ function App(){
   }
 
   // ── Absence toggle ──
+  async function recoverTasks(va){
+    if(!window.confirm(`Pull all queued coverage tasks back to ${va.Name}?`))return;
+    try{
+      const t=await gT();
+      // Fetch all queued tasks that were assigned to this VA (by CoverageForEmail or original VAEmail)
+      const [byCov,byVA]=await Promise.all([
+        gAll(t,`${lUrl("VA_Activity")}?expand=fields&$filter=fields/CoverageForEmail eq '${va.Email}' and fields/Status eq 'Queued'&$top=200`),
+        gAll(t,`${lUrl("VA_Activity")}?expand=fields&$filter=fields/VAEmail eq '${va.Email}' and fields/Status eq 'Queued'&$top=200`),
+      ]);
+      const allTasks=[...byCov,...byVA.filter(t=>!byCov.find(c=>c.id===t.id))];
+      for(const item of allTasks){
+        await gPatch(t,iUrl("VA_Activity",item.id),{VAEmail:va.Email,VAName:va.Name,Source:item.fields.Source==="Coverage"?"Daily":item.fields.Source,CoverageForEmail:"",CoverageForName:""});
+      }
+      fl(`${allTasks.length} tasks recovered to ${va.Name}`);
+      await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+
   async function toggleAbsence(va){
     try{
     const t=await gT();const ns=getVAStatus(va)==="Out"?"Active":"Out";
@@ -504,12 +536,14 @@ function App(){
 
   // ── Shift clock ──
   function clockIn(){
-    // Validate: prevent double clock-in
     if(shift){fl("Already clocked in!");return;}
-    setShift({ClockIn:new Date().toISOString(),Breaks:[],_ob:false,_bs:null});fl("Clocked in!");
+    const s={ClockIn:new Date().toISOString(),Breaks:[],_ob:false,_bs:null};
+    setShift(s);
+    try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}
+    fl("Clocked in!");
   }
-  function startBreak(){setShift(p=>p?{...p,_ob:true,_bs:new Date().toISOString()}:p);}
-  function endBreak(){setShift(p=>{if(!p||!p._bs)return p;return{...p,_ob:false,Breaks:[...p.Breaks,{s:p._bs,e:new Date().toISOString()}],_bs:null};});}
+  function startBreak(){setShift(p=>{if(!p)return p;const s={...p,_ob:true,_bs:new Date().toISOString()};try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});}
+  function endBreak(){setShift(p=>{if(!p||!p._bs)return p;const s={...p,_ob:false,Breaks:[...p.Breaks,{s:p._bs,e:new Date().toISOString()}],_bs:null};try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});}
   async function clockOut(){
     if(!shift)return;const now=new Date();const bks=[...shift.Breaks];
     if(shift._ob&&shift._bs)bks.push({s:shift._bs,e:now.toISOString()});
@@ -518,7 +552,7 @@ function App(){
     // Warn if 10+ hours
     if(wMin>600&&!window.confirm(`You've been clocked in for ${fM(wMin)}. Clock out?`))return;
     try{await saveShift({VAEmail:myEmail,VAName:myEmp?.Name||myEmail,ClockIn:shift.ClockIn,ClockOut:now.toISOString(),BreakMinutes:bMin,WorkMinutes:wMin,Breaks:bks});
-      setShift(null);fl("Clocked out!");await reload();
+      setShift(null);try{sessionStorage.removeItem("va_shift_"+myEmail);}catch(e){}fl("Clocked out!");await reload();
     }catch(e){fl("Error: "+e.message);}
   }
 
@@ -830,7 +864,7 @@ function App(){
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} guestVAEmails={guestVAEmails}/>}
         {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest}/>}
       </div>
     </div>
   );
@@ -1322,7 +1356,7 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps,guestVAs})
 // ============================================================
 // ADMIN VIEW
 // ============================================================
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest}){
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
@@ -1397,7 +1431,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       <div style={S.cardTitle}>{"\u{1F6D1}"} VA Absence Management</div>
       {data.vas.map(va=><div key={va.Email} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
         <div><div style={{fontSize:14,fontWeight:600,color:getVAStatus(va)==="Out"?C.error:C.teal700}}>{va.Name}</div><div style={{fontSize:11,color:C.gray400}}>{data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase()).length} properties</div></div>
-        <div style={{display:"flex",alignItems:"center",gap:8}}><Badge type={getVAStatus(va)==="Out"?"error":"success"}>{getVAStatus(va)}</Badge><button style={{...(getVAStatus(va)==="Out"?S.btn(C.success):S.btn(C.error)),...S.btnSm}} onClick={()=>onToggleAbsence(va)}>{getVAStatus(va)==="Out"?"Mark In":"Mark Out"}</button></div></div>)}
+        <div style={{display:"flex",alignItems:"center",gap:6}}><Badge type={getVAStatus(va)==="Out"?"error":"success"}>{getVAStatus(va)}</Badge><button style={{...(getVAStatus(va)==="Out"?S.btn(C.success):S.btn(C.error)),...S.btnSm}} onClick={()=>onToggleAbsence(va)}>{getVAStatus(va)==="Out"?"Mark In":"Mark Out"}</button><button style={{...S.btnO(C.info,C.info),...S.btnSm,fontSize:10}} onClick={()=>onRecoverTasks(va)} title="Recover any coverage tasks back to this VA">↩ Recover</button></div></div>)}
       {covQ.length>0&&<div style={{marginTop:10,padding:8,background:C.warningBg,borderRadius:4,fontSize:12,color:C.warning}}>{"\u26A0"} {covQ.length} unclaimed coverage tasks</div>}
     </div>
 
