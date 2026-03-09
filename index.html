@@ -337,13 +337,18 @@ function App(){
   function buildQueue(d,email){
     // 1. Load all persisted Queued tasks from VA_Activity
     const persistedQueued=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&(a.Status==="Queued"||a.Status==="In Progress"));
-    const q=[],cv=[];
+    const q=[],cv=[],tm=[];
     
     persistedQueued.forEach(a=>{
-      const t={...a,_localId:a.id,_spId:a.id}; // _spId = SharePoint item ID for PATCH
-      if(a.Source==="Coverage"||a.CoverageForEmail){cv.push(t);}
+      const t={...a,_localId:a.id,_spId:a.id};
+      if(a.Status==="In Progress"){
+        // Restore as active timer — use StartTime from SP, default to now if missing
+        const timerTask={...t,StartTime:a.StartTime||new Date().toISOString(),_pMs:0,_pS:null};
+        tm.push(timerTask);
+      } else if(a.Source==="Coverage"||a.CoverageForEmail){cv.push(t);}
       else{q.push(t);}
     });
+    if(tm.length>0){setTimers(tm);console.log("[VT] Restored",tm.length,"active timers");}
 
     // 2. Generate recurring daily/weekly tasks that don't already exist
     if(d.config.recurringTasks){
