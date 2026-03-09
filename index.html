@@ -152,7 +152,8 @@ function today(){return new Date().toISOString().slice(0,10);}
 function dAgo(d){return Math.floor((Date.now()-new Date(d).getTime())/864e5);}
 function uid(){return Date.now()+"-"+Math.random().toString(36).slice(2,6);}
 function sortCats(cats){if(!cats)return[];const other=cats.filter(c=>c.name==="Admin/Other");const rest=cats.filter(c=>c.name!=="Admin/Other").sort((a,b)=>a.name.localeCompare(b.name));return[...rest,...other];}
-function inRange(d,from,to){if(!d)return false;const t=new Date(d).getTime();return t>=new Date(from).getTime()&&t<=new Date(to).getTime()+864e5;}
+function inRange(d,from,to){if(!d)return false;const t=new Date(d).getTime();if(isNaN(t))return false;return t>=new Date(from).getTime()&&t<=new Date(to).getTime()+864e5;}
+function actDate(a){return a.ActivityDate||a.EndTime||a.StartTime||a.Created||a.Modified||null;}
 
 // ============================================================
 // GRAPH API
@@ -238,6 +239,8 @@ async function loadAll(token){
   const properties=pR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
   const portfolios=ptR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
   const activities=aR.map(a=>({id:a.id,...a.fields}));
+  const sample=activities.filter(a=>a.ActivityType==="Task").slice(0,3);
+  console.log("[VT] Activity sample:",sample.map(a=>({Status:a.Status,ActivityDate:a.ActivityDate,EndTime:a.EndTime,Created:a.Created,VAEmail:a.VAEmail})));
   const guests=gR.map(g=>({id:g.id,...g.fields})).filter(g=>g.IsActive!==false);
   const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant");
   const pms=employees.filter(e=>e.JobTitle==="Property Manager"&&e.EmployeeActive!==false);
@@ -356,7 +359,7 @@ function App(){
       const todayDate=new Date(td);
       const todayDow=todayDate.getDay(); // 0=Sun,1=Mon,...6=Sat
       // Check what's already in SharePoint for today (any status)
-      const todayTasks=d.activities.filter(a=>a.ActivityType==="Task"&&a.ActivityDate&&a.ActivityDate.slice(0,10)===td);
+      const todayTasks=d.activities.filter(a=>a.ActivityType==="Task"&&actDate(a)&&actDate(a).slice(0,10)===td);
       const existing=new Set(todayTasks.map(t=>`${t.VAEmail}|${t.Title}`));
       // Also check what we just loaded as queued (could be from previous days)
       persistedQueued.forEach(a=>{existing.add(`${a.VAEmail}|${a.Title}`);});
@@ -687,8 +690,8 @@ function App(){
     const now=new Date();const mon=new Date(now);mon.setDate(mon.getDate()-(mon.getDay()+6)%7-7);mon.setHours(0,0,0,0);
     const sun=new Date(mon);sun.setDate(sun.getDate()+6);sun.setHours(23,59,59,999);
     const from=mon.toISOString().slice(0,10),to=sun.toISOString().slice(0,10);
-    const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(a.ActivityDate,from,to));
-    const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(a.ActivityDate,from,to));
+    const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(actDate(a),from,to));
+    const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(actDate(a),from,to));
     const done=tasks.filter(t=>t.Status==="Completed");
     const blocked=tasks.filter(t=>t.Status==="Blocked");
     const inc=tasks.filter(t=>t.Status==="Incomplete");
@@ -888,11 +891,11 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
   // Filter activities by date range and optionally by properties
   const propIds=filterProps?new Set(filterProps.map(p=>p.Title)):null;
   const vaEmailSet=filterVAs?new Set(filterVAs.map(v=>v.Email?.toLowerCase())):null;
-  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!propIds||propIds.has(a.PropertyId))&&(!vaEmailSet||vaEmailSet.has(a.VAEmail?.toLowerCase())));
+  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(actDate(a),dfFrom,dfTo)&&(!propIds||propIds.has(a.PropertyId))&&(!vaEmailSet||vaEmailSet.has(a.VAEmail?.toLowerCase())));
   const done=tasks.filter(a=>a.Status==="Completed");
   const blocked=tasks.filter(a=>a.Status==="Blocked");
   const inc=tasks.filter(a=>a.Status==="Incomplete");
-  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!vaEmailSet||vaEmailSet.has(a.VAEmail?.toLowerCase())));
+  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(actDate(a),dfFrom,dfTo)&&(!vaEmailSet||vaEmailSet.has(a.VAEmail?.toLowerCase())));
   const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0);
   const taskMin=done.reduce((s,a)=>s+(a.DurationMin||0),0);
   const rate=tasks.length?Math.round(done.length/tasks.length*100):0;
@@ -1244,7 +1247,7 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
         const va=getVA(prop.Title);
         const pendingQ=queue.filter(t=>t.PropertyId===prop.Title);
         const activeT=timers.filter(t=>t.PropertyId===prop.Title);
-        const recentTasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.PropertyId===prop.Title&&dAgo(a.ActivityDate)<=7);
+        const recentTasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.PropertyId===prop.Title&&dAgo(actDate(a))<=7);
         const done=recentTasks.filter(a=>a.Status==="Completed");
         const blocked=recentTasks.filter(a=>a.Status==="Blocked");
 
@@ -1292,11 +1295,11 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
           <thead><tr>{["Date","Property","VA","Task","Duration","Status"].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
-          <tbody>{data.activities.filter(a=>a.ActivityType==="Task"&&mgrProps.some(p=>p.Title===a.PropertyId)&&dAgo(a.ActivityDate)<=7).slice(0,30).map((t,i)=>(
+          <tbody>{data.activities.filter(a=>a.ActivityType==="Task"&&mgrProps.some(p=>p.Title===a.PropertyId)&&dAgo(actDate(a))<=7).slice(0,30).map((t,i)=>(
             <tr key={i}><td style={{...S.td,whiteSpace:"nowrap"}}>{fD(t.ActivityDate)}</td><td style={{...S.td,fontSize:12}}>{t.PropertyName}</td><td style={{...S.td,fontWeight:500}}>{t.VAName}</td><td style={{...S.td,maxWidth:200}}>{t.Title}{t.Notes&&<div style={{fontSize:11,color:C.gray400}}>{"\u{1F4AC}"} {t.Notes}</div>}</td><td style={{...S.td,fontFamily:mono,fontSize:12}}>{t.DurationMin?fM(t.DurationMin):"\u2014"}</td><td style={S.td}><Badge type={stBadge[t.Status]||"neutral"}>{t.Status}</Badge></td></tr>
           ))}</tbody>
         </table>
-        {data.activities.filter(a=>a.ActivityType==="Task"&&mgrProps.some(p=>p.Title===a.PropertyId)&&dAgo(a.ActivityDate)<=7).length===0&&<div style={{textAlign:"center",padding:30,color:C.gray400}}>No activity yet.</div>}
+        {data.activities.filter(a=>a.ActivityType==="Task"&&mgrProps.some(p=>p.Title===a.PropertyId)&&dAgo(actDate(a))<=7).length===0&&<div style={{textAlign:"center",padding:30,color:C.gray400}}>No activity yet.</div>}
       </div>
     </div>
   </div>);
@@ -1339,10 +1342,10 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps,guestVAs})
   const va=data.vas.find(v=>v.Email?.toLowerCase()===(isMgr?selVa:myEmail)?.toLowerCase())||myVa;
   const vaEmail=va?.Email?.toLowerCase()||myEmail;
   const per=7;
-  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.VAEmail?.toLowerCase()===vaEmail&&dAgo(a.ActivityDate)<=per);
+  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.VAEmail?.toLowerCase()===vaEmail&&dAgo(actDate(a))<=per);
   const done=tasks.filter(t=>t.Status==="Completed");const blocked=tasks.filter(t=>t.Status==="Blocked");const cov=tasks.filter(t=>t.CoverageForEmail);
   const taskMin=done.reduce((s,t)=>s+(t.DurationMin||0),0);const rate=tasks.length?Math.round(done.length/tasks.length*100):0;
-  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaEmail&&dAgo(a.ActivityDate)<=per);
+  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaEmail&&dAgo(actDate(a))<=per);
   const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0);const breakMin=shifts.reduce((s,a)=>s+(a.BreakMinutes||0),0);
   const util=shiftMin>0?Math.round(taskMin/shiftMin*100):0;const gap=Math.max(0,shiftMin-taskMin);
   const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===vaEmail);
