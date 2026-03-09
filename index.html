@@ -219,7 +219,7 @@ async function gPostActivity(token,fields){
 
 async function loadAll(token){
   const[eR,cR,pR,ptR,aR,gR]=await Promise.all([
-    safeGet(token,"Employees",`${lUrl("Employees")}?expand=fields&$top=200`),
+    safeGet(token,"Employees",`${lUrl("New%20Hires")}?expand=fields&$top=200`),
     safeGet(token,"Config",`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
     safeGet(token,"Properties",`${lUrl("VA_Properties")}?expand=fields&$top=200`),
     safeGet(token,"Portfolios",`${lUrl("VA_Portfolios")}?expand=fields&$top=200`),
@@ -402,7 +402,7 @@ function App(){
   // ── Absence toggle ──
   async function toggleAbsence(va){
     const t=await gT();const ns=va.VATrackerStatus==="Out"?"Active":"Out";
-    await gPatch(t,iUrl("Employees",va.id),{VATrackerStatus:ns});
+    await gPatch(t,iUrl("New%20Hires",va.id),{VATrackerStatus:ns});
     if(ns==="Out"){
       await gPost(t,lUrl("VA_Activity"),{Title:`${va.Name}-Out-${today()}`,ActivityType:"Absence",VAEmail:va.Email,VAName:va.Name,ActivityDate:new Date().toISOString(),StartTime:new Date().toISOString(),Status:"Out",MarkedByEmail:myEmail,MarkedByName:acct.name||myEmail});
       // PATCH all their Queued tasks in SharePoint to Coverage
