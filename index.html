@@ -223,11 +223,11 @@ async function gPostActivity(token,fields){
 async function loadAll(token){
   const[eR,nhR,cR,pR,ptR,aR,gR]=await Promise.all([
     safeGet(token,"Employees",`${lUrl("Employees")}?expand=fields&$top=200`),
-    safeGet(token,"New Hires",`${lUrl("New%20Hires")}?expand=fields&$top=200`),
+    (async()=>{for(const n of["NewHires","New%20Hires","New_Hires"]){try{const r=await gAll(token,`${lUrl(n)}?expand=fields&$top=200`);console.log("[VT] New Hires found as:",n,r.length);return r;}catch(e){}}console.warn("[VT] New Hires list not found under any name");return[];})(),
     safeGet(token,"Config",`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
     safeGet(token,"Properties",`${lUrl("VA_Properties")}?expand=fields&$top=200`),
     safeGet(token,"Portfolios",`${lUrl("VA_Portfolios")}?expand=fields&$top=200`),
-    safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=500`),
+    safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=1000&$orderby=fields/Created desc`),
     safeGet(token,"Guests",`${lUrl("VA_Guests")}?expand=fields&$top=200`),
   ]);
   // Merge both lists, deduplicate by email
@@ -425,18 +425,23 @@ function App(){
     if(!window.confirm(`Pull all queued coverage tasks back to ${va.Name}?`))return;
     try{
       const t=await gT();
-      // Fetch all queued tasks that were assigned to this VA (by CoverageForEmail or original VAEmail)
-      const [byCov,byVA]=await Promise.all([
-        gAll(t,`${lUrl("VA_Activity")}?expand=fields&$filter=fields/CoverageForEmail eq '${va.Email}' and fields/Status eq 'Queued'&$top=200`),
-        gAll(t,`${lUrl("VA_Activity")}?expand=fields&$filter=fields/VAEmail eq '${va.Email}' and fields/Status eq 'Queued'&$top=200`),
-      ]);
-      const allTasks=[...byCov,...byVA.filter(t=>!byCov.find(c=>c.id===t.id))];
-      for(const item of allTasks){
-        await gPatch(t,iUrl("VA_Activity",item.id),{VAEmail:va.Email,VAName:va.Name,Source:item.fields.Source==="Coverage"?"Daily":item.fields.Source,CoverageForEmail:"",CoverageForName:""});
+      // Load all queued/in-progress tasks and filter client-side (avoids OData filter issues)
+      const allAct=await gAll(t,`${lUrl("VA_Activity")}?expand=fields&$top=500`);
+      const email=va.Email.toLowerCase();
+      const toRecover=allAct.filter(a=>{
+        const f=a.fields;
+        return f.Status==="Queued"&&(
+          f.CoverageForEmail?.toLowerCase()===email||
+          (f.VAEmail?.toLowerCase()===email&&f.Source==="Coverage")
+        );
+      });
+      console.log("[VT] recoverTasks found",toRecover.length,"tasks for",va.Name);
+      for(const item of toRecover){
+        await gPatch(t,iUrl("VA_Activity",item.id),{VAEmail:va.Email,VAName:va.Name,Source:"Daily",CoverageForEmail:"",CoverageForName:""});
       }
-      fl(`${allTasks.length} tasks recovered to ${va.Name}`);
+      fl(`${toRecover.length} tasks recovered to ${va.Name}`);
       await reload();
-    }catch(e){fl("Error: "+e.message);}
+    }catch(e){console.error("[VT] recoverTasks error:",e);fl("Error: "+e.message);}
   }
 
   async function toggleAbsence(va){
@@ -1301,7 +1306,7 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails}){
   const isGuest=role==="guest";
   const propFilter=role==="manager"?new Set(mgrProps.map(p=>p.Title)):null;
   const gSet=guestVAEmails?.length>0?new Set(guestVAEmails):null;
-  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status!=="Queued"&&a.Status!=="In Progress"&&!(a.Notes==="Removed by admin")&&(isGuest?(gSet?gSet.has(a.VAEmail?.toLowerCase()):false):(isMgr?(propFilter?propFilter.has(a.PropertyId):true):a.VAEmail?.toLowerCase()===myEmail))).slice(0,50);
+  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status!=="Queued"&&a.Status!=="In Progress"&&a.Notes!=="Removed by admin"&&(isGuest?(gSet?gSet.has(a.VAEmail?.toLowerCase()):false):(isMgr?(propFilter?propFilter.has(a.PropertyId):true):a.VAEmail?.toLowerCase()===myEmail))).slice(0,100);
   const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&(role==="admin"||a.VAEmail?.toLowerCase()===myEmail)).slice(0,30);
 
   return(<div>
