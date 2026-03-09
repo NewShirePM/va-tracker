@@ -405,9 +405,11 @@ function App(){
 
   // ── Absence toggle ──
   async function toggleAbsence(va){
+    try{
     const t=await gT();const ns=va.VATrackerStatus==="Out"?"Active":"Out";
     const empList=va.JobTitle==="Virtual Assistant"?"New%20Hires":"Employees";
-    await gPatch(t,iUrl(empList,va.id),{VATrackerStatus:ns});
+    console.log("[VT] toggleAbsence",va.Name,ns,empList,va.id);
+    try{await gPatch(t,iUrl(empList,va.id),{VATrackerStatus:ns});}catch(pe){console.warn("[VT] VATrackerStatus PATCH failed (column may be missing):",pe.message);}
     if(ns==="Out"){
       await gPost(t,lUrl("VA_Activity"),{Title:`${va.Name}-Out-${today()}`,ActivityType:"Absence",VAEmail:va.Email,VAName:va.Name,ActivityDate:new Date().toISOString(),StartTime:new Date().toISOString(),Status:"Out",MarkedByEmail:myEmail,MarkedByName:acct.name||myEmail});
       // PATCH all their Queued tasks in SharePoint to Coverage
@@ -430,6 +432,7 @@ function App(){
       fl(`${va.Name} marked IN — ${returning.length} tasks returned`);
     }
     await reload();
+    }catch(e){console.error("[VT] toggleAbsence error:",e);fl("Error: "+e.message);}
   }
 
   // ── Timer actions ──
