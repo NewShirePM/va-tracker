@@ -42,6 +42,8 @@ const SCOPES = ["Sites.ReadWrite.All", "User.Read", "User.Invite.All"];
 // ============================================================
 // ROLE DETECTION
 // ============================================================
+function getVAStatus(emp){return emp.VATrackerStatus||emp.VA_TrackerStatus||emp["VA Tracker Status"]||"Active";}
+function getVARole(emp){return emp.VATrackerRole||emp.VA_TrackerRole||emp["VA Tracker Role"]||"";}
 const ROLE_MAP = {
   "Virtual Assistant": "va",
   "Property Manager": "manager",
@@ -49,7 +51,8 @@ const ROLE_MAP = {
   "Owner/Operator": "admin",
 };
 function detectRole(emp) {
-  if (emp.VATrackerRole) return emp.VATrackerRole.toLowerCase();
+  const r=emp.VATrackerRole||emp.VA_TrackerRole||emp["VA Tracker Role"]||"";
+  if(r) return r.toLowerCase().trim();
   return ROLE_MAP[emp.JobTitle] || null;
 }
 
@@ -236,7 +239,7 @@ async function loadAll(token){
   const portfolios=ptR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
   const activities=aR.map(a=>({id:a.id,...a.fields}));
   const guests=gR.map(g=>({id:g.id,...g.fields})).filter(g=>g.IsActive!==false);
-  const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant"&&e.EmployeeActive!==false);
+  const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant");
   const pms=employees.filter(e=>e.JobTitle==="Property Manager"&&e.EmployeeActive!==false);
   console.log("[VT] Loaded:",{emp:employees.length,props:properties.length,port:portfolios.length,act:activities.length,vas:vas.length,pms:pms.length,guests:guests.length});
   return{employees,config,properties,portfolios,activities,vas,pms,guests};
@@ -357,7 +360,7 @@ function App(){
         const cat=d.config.categories?.find(c=>c.id===rt.category);
         const taskSrc=freq==="weekly"?"Weekly":"Daily";
         const task={Title:rt.description,VAEmail:va.Email,VAName:va.Name,PropertyId:rt.propertyId||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Source:taskSrc,Status:"Queued",Priority:"Normal",ActivityDate:td,ActivityType:"Task",icon:rt.icon||""};
-        if(va.VATrackerStatus==="Out"){task.Source="Coverage";task.CoverageForEmail=va.Email;task.CoverageForName=va.Name;}
+        if(getVAStatus(va)==="Out"){task.Source="Coverage";task.CoverageForEmail=va.Email;task.CoverageForName=va.Name;}
         if(!recGroupMap[key])recGroupMap[key]=[];
         recGroupMap[key].push(task);
       });
@@ -406,7 +409,7 @@ function App(){
   // ── Absence toggle ──
   async function toggleAbsence(va){
     try{
-    const t=await gT();const ns=va.VATrackerStatus==="Out"?"Active":"Out";
+    const t=await gT();const ns=getVAStatus(va)==="Out"?"Active":"Out";
     const empList=va.JobTitle==="Virtual Assistant"?"New%20Hires":"Employees";
     console.log("[VT] toggleAbsence",va.Name,ns,empList,va.id);
     try{await gPatch(t,iUrl(empList,va.id),{VATrackerStatus:ns});}catch(pe){console.warn("[VT] VATrackerStatus PATCH failed (column may be missing):",pe.message);}
@@ -653,7 +656,7 @@ function App(){
       const vT=tasks.filter(t=>t.VAEmail===va.Email);const vD=vT.filter(t=>t.Status==="Completed");const vB=vT.filter(t=>t.Status==="Blocked");const vI=vT.filter(t=>t.Status==="Incomplete");
       const vS=shifts.filter(s=>s.VAEmail===va.Email);const vSm=vS.reduce((s,a)=>s+(a.WorkMinutes||0),0);const vTm=vD.reduce((s,t)=>s+(t.DurationMin||0),0);
       const vU=vSm>0?Math.round(vTm/vSm*100):0;const vR=vT.length?Math.round(vD.length/vT.length*100):0;
-      report+=`\n${"=".repeat(60)}\n${va.Name.toUpperCase()}${va.VATrackerStatus==="Out"?" [OUT]":""}\n${"=".repeat(60)}\n`;
+      report+=`\n${"=".repeat(60)}\n${va.Name.toUpperCase()}${getVAStatus(va)==="Out"?" [OUT]":""}\n${"=".repeat(60)}\n`;
       report+=`Tasks: ${vD.length}/${vT.length} completed (${vR}%)\nShift Time: ${fM(vSm)} | Task Time: ${fM(vTm)} | Utilization: ${vU}%\n`;
       if(vB.length)report+=`\nBLOCKED (${vB.length}):\n${vB.map(t=>`  • ${t.Title} — ${t.PropertyName}${t.Notes?" — "+t.Notes:""}`).join("\n")}\n`;
       if(vI.length)report+=`\nINCOMPLETE (${vI.length}):\n${vI.map(t=>`  • ${t.Title} — ${t.PropertyName}${t.Notes?" — "+t.Notes:""}`).join("\n")}\n`;
@@ -763,7 +766,7 @@ function App(){
   const mgrProps=myManagedProps();
   const myQ=queue.filter(t=>isVA?(t.VAEmail&&t.VAEmail.toLowerCase()===myEmail):true);
   const myTm=timers.filter(t=>isVA?t.VAEmail.toLowerCase()===myEmail:true);
-  const outVAs=data?data.vas.filter(v=>v.VATrackerStatus==="Out"):[];
+  const outVAs=data?data.vas.filter(v=>getVAStatus(v)==="Out"):[];
   // Guest computed
   const guestVAEmails=isGuest&&myGuest?.VAEmails?myGuest.VAEmails.split(",").map(e=>e.trim().toLowerCase()).filter(Boolean):[];
   const guestVAs=isGuest?data?.vas.filter(v=>guestVAEmails.includes(v.Email?.toLowerCase()))||[]:null;
@@ -874,7 +877,7 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
         {!filterProps&&!isGuest&&<KPI label="Utilization" value={`${util}%`} color={util>=75?C.success:util>=50?C.warning:shiftMin>0?C.error:C.teal700}/>}
         <KPI label="Blocked" value={blocked.length} color={blocked.length>0?C.error:C.success}/>
         {!isGuest&&<KPI label="Coverage" value={covQ.length} color={covQ.length>0?C.warning:C.success}/>}
-        {!filterProps&&!isGuest&&<KPI label="VAs Out" value={data.vas.filter(v=>v.VATrackerStatus==="Out").length} color={data.vas.filter(v=>v.VATrackerStatus==="Out").length>0?C.warning:C.teal700}/>}
+        {!filterProps&&!isGuest&&<KPI label="VAs Out" value={data.vas.filter(v=>getVAStatus(v)==="Out").length} color={data.vas.filter(v=>getVAStatus(v)==="Out").length>0?C.warning:C.teal700}/>}
       </div>
 
       {/* Needs Attention */}
@@ -892,7 +895,7 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
         <div style={S.cardTitle}>{"\u{1F4CB}"} Task Board</div>
         <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:8}}>
           {filteredVAs.map(va=>{
-            const isOut=va.VATrackerStatus==="Out";
+            const isOut=getVAStatus(va)==="Out";
             const vQ=queue.filter(t=>t.VAEmail&&t.VAEmail.toLowerCase()===va.Email.toLowerCase());
             const vT=timers.filter(t=>t.VAEmail.toLowerCase()===va.Email.toLowerCase());
             const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase());
@@ -942,8 +945,8 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
                 const vS=shifts.filter(a=>a.VAEmail===va.Email);const vSm=vS.reduce((s,a)=>s+(a.WorkMinutes||0),0);const vTm=vD.reduce((s,a)=>s+(a.DurationMin||0),0);
                 const vR=vT.length?Math.round(vD.length/vT.length*100):0;const vU=vSm>0?Math.round(vTm/vSm*100):0;
                 const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase());
-                return(<tr key={va.Email} style={{opacity:va.VATrackerStatus==="Out"?0.6:1}}>
-                  <td style={{...S.td,fontWeight:600,color:va.VATrackerStatus==="Out"?C.error:C.teal700}}>{va.Name}</td>
+                return(<tr key={va.Email} style={{opacity:getVAStatus(va)==="Out"?0.6:1}}>
+                  <td style={{...S.td,fontWeight:600,color:getVAStatus(va)==="Out"?C.error:C.teal700}}>{va.Name}</td>
                   <td style={{...S.td,fontSize:12}}>{port.length} props</td>
                   <td style={S.td}>{vD.length}/{vT.length}</td>
                   <td style={S.td}><Badge type={vR>=85?"success":vR>=60?"warning":"error"}>{vR}%</Badge></td>
@@ -1204,7 +1207,7 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
         return(<div key={prop.Title} style={{...S.card,flex:"1 1 280px",minWidth:260,borderLeft:`3px solid ${blocked.length>0?C.error:activeT.length>0?C.success:C.teal100}`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
             <div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{prop.PropertyName}</div><div style={{fontSize:11,color:C.gray400}}>{prop.Units} units · {prop.PropertyGroup}</div></div>
-            {va?<Badge type={va.VATrackerStatus==="Out"?"error":"success"}>{va.Name.split(" ")[0]}</Badge>:<Badge type="error">No VA</Badge>}
+            {va?<Badge type={getVAStatus(va)==="Out"?"error":"success"}>{va.Name.split(" ")[0]}</Badge>:<Badge type="error">No VA</Badge>}
           </div>
           <div style={{display:"flex",gap:8,marginBottom:8}}>
             <div style={{flex:1,textAlign:"center",padding:6,background:C.teal50,borderRadius:4}}><div style={{fontSize:18,fontWeight:700,fontFamily:mono,color:C.teal700}}>{done.length}</div><div style={{fontSize:10,color:C.gray400}}>Done (7d)</div></div>
@@ -1236,7 +1239,7 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
       <div style={{marginTop:10}}><label style={S.label}>Task *</label><input style={S.input} value={tDesc} onChange={e=>setTDesc(e.target.value)} placeholder="What needs to be done..."/></div>
       <div style={{marginTop:8}}><label style={S.label}>Notes for VA</label><input style={S.input} value={tNotes} onChange={e=>setTNotes(e.target.value)} placeholder="Additional context (optional)"/></div>
       <button style={{...S.btn(C.headerBg),width:"100%",marginTop:12}} onClick={handleSubmit}>{"\u{1F4CC}"} Submit Task</button>
-      {selProp&&(()=>{const va=getVA(selProp);return va?<div style={{fontSize:12,color:C.success,marginTop:8}}>{"\u2192"} Routes to: {va.Name}{va.VATrackerStatus==="Out"?` (\u26A0 currently OUT — will go to coverage)`:""}</div>:<div style={{fontSize:12,color:C.error,marginTop:8}}>{"\u26A0"} No VA assigned to this property</div>;})()}
+      {selProp&&(()=>{const va=getVA(selProp);return va?<div style={{fontSize:12,color:C.success,marginTop:8}}>{"\u2192"} Routes to: {va.Name}{getVAStatus(va)==="Out"?` (\u26A0 currently OUT — will go to coverage)`:""}</div>:<div style={{fontSize:12,color:C.error,marginTop:8}}>{"\u26A0"} No VA assigned to this property</div>;})()}
     </div>
 
     {/* Recent activity on my properties */}
@@ -1304,7 +1307,7 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps,guestVAs})
   const catList=Object.entries(catMap).sort((a,b)=>b[1].m-a[1].m);
 
   return(<div>
-    {(isMgr||isGuest)&&<div style={{...S.card,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>{isGuest&&<span style={{fontSize:12,color:C.purple,display:"flex",alignItems:"center",gap:4}}>👁️ Read-only scorecard</span>}<div style={{flex:1,minWidth:200}}><label style={S.label}>VA</label><select style={S.select} value={selVa} onChange={e=>setSelVa(e.target.value)}>{viewableVAs.map(v=><option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}{v.VATrackerStatus==="Out"?" [OUT]":""}</option>)}</select></div></div>}
+    {(isMgr||isGuest)&&<div style={{...S.card,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>{isGuest&&<span style={{fontSize:12,color:C.purple,display:"flex",alignItems:"center",gap:4}}>👁️ Read-only scorecard</span>}<div style={{flex:1,minWidth:200}}><label style={S.label}>VA</label><select style={S.select} value={selVa} onChange={e=>setSelVa(e.target.value)}>{viewableVAs.map(v=><option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}{getVAStatus(v)==="Out"?" [OUT]":""}</option>)}</select></div></div>}
     {!isMgr&&va&&<div style={{marginBottom:12}}><div style={{fontSize:18,fontWeight:700,color:C.teal700}}>{va.Name}</div><div style={{fontSize:12,color:C.gray400}}>{vaPropsL.length} properties · {vaPropsL.reduce((s,p)=>s+(p.Units||0),0)} units</div></div>}
     <div style={{...S.row,marginBottom:16}}>{[{l:"Tasks",v:tasks.length},{l:"Done",v:done.length,c:C.success},{l:"Rate",v:`${rate}%`,c:rate>=85?C.success:undefined},{l:"Shift",v:fM(shiftMin)},{l:"Util",v:`${util}%`,c:util>=75?C.success:util<50&&shiftMin>0?C.error:undefined},{l:"Gap",v:fM(gap),c:gap>120?C.error:undefined},{l:"Coverage",v:cov.length,c:cov.length>0?C.warning:undefined}].map((k,i)=><KPI key={i} label={k.l} value={k.v} color={k.c}/>)}</div>
     {shiftMin>0&&<div style={{...S.card,padding:14}}><div style={{fontSize:13,fontWeight:600,color:C.teal700,marginBottom:8}}>Time Breakdown</div><div style={{display:"flex",height:22,borderRadius:4,overflow:"hidden",background:C.gray100}}><div style={{width:`${Math.min(util,100)}%`,background:C.success,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,color:"#FFF"}}>{util>14?`${util}%`:""}</div>{breakMin>0&&<div style={{width:`${Math.min(Math.round(breakMin/(shiftMin+breakMin)*100),40)}%`,background:C.warning}}/>}<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:C.gray400}}>{gap>0?`${fM(gap)} gap`:""}</div></div></div>}
@@ -1393,8 +1396,8 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
     <div style={{...S.card,borderLeft:`3px solid ${C.error}`}}>
       <div style={S.cardTitle}>{"\u{1F6D1}"} VA Absence Management</div>
       {data.vas.map(va=><div key={va.Email} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
-        <div><div style={{fontSize:14,fontWeight:600,color:va.VATrackerStatus==="Out"?C.error:C.teal700}}>{va.Name}</div><div style={{fontSize:11,color:C.gray400}}>{data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase()).length} properties</div></div>
-        <div style={{display:"flex",alignItems:"center",gap:8}}><Badge type={va.VATrackerStatus==="Out"?"error":"success"}>{va.VATrackerStatus||"Active"}</Badge><button style={{...(va.VATrackerStatus==="Out"?S.btn(C.success):S.btn(C.error)),...S.btnSm}} onClick={()=>onToggleAbsence(va)}>{va.VATrackerStatus==="Out"?"Mark In":"Mark Out"}</button></div></div>)}
+        <div><div style={{fontSize:14,fontWeight:600,color:getVAStatus(va)==="Out"?C.error:C.teal700}}>{va.Name}</div><div style={{fontSize:11,color:C.gray400}}>{data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase()).length} properties</div></div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><Badge type={getVAStatus(va)==="Out"?"error":"success"}>{getVAStatus(va)}</Badge><button style={{...(getVAStatus(va)==="Out"?S.btn(C.success):S.btn(C.error)),...S.btnSm}} onClick={()=>onToggleAbsence(va)}>{getVAStatus(va)==="Out"?"Mark In":"Mark Out"}</button></div></div>)}
       {covQ.length>0&&<div style={{marginTop:10,padding:8,background:C.warningBg,borderRadius:4,fontSize:12,color:C.warning}}>{"\u26A0"} {covQ.length} unclaimed coverage tasks</div>}
     </div>
 
