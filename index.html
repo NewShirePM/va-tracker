@@ -228,7 +228,7 @@ async function loadAll(token){
     safeGet(token,"Config",`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
     safeGet(token,"Properties",`${lUrl("VA_Properties")}?expand=fields&$top=200`),
     safeGet(token,"Portfolios",`${lUrl("VA_Portfolios")}?expand=fields&$top=200`),
-    safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=1000&$orderby=fields/Created desc`),
+    safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=1000`),
     safeGet(token,"Guests",`${lUrl("VA_Guests")}?expand=fields&$top=200`),
   ]);
   // Merge both lists, deduplicate by email
@@ -239,8 +239,7 @@ async function loadAll(token){
   const properties=pR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
   const portfolios=ptR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
   const activities=aR.map(a=>({id:a.id,...a.fields}));
-  const sample=activities.filter(a=>a.ActivityType==="Task").slice(0,3);
-  console.log("[VT] Activity sample:",sample.map(a=>({Status:a.Status,ActivityDate:a.ActivityDate,EndTime:a.EndTime,Created:a.Created,VAEmail:a.VAEmail})));
+
   const guests=gR.map(g=>({id:g.id,...g.fields})).filter(g=>g.IsActive!==false);
   const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant");
   const pms=employees.filter(e=>e.JobTitle==="Property Manager"&&e.EmployeeActive!==false);
