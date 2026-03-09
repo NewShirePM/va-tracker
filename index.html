@@ -359,9 +359,13 @@ function App(){
       const todayDow=todayDate.getDay(); // 0=Sun,1=Mon,...6=Sat
       // Check what's already in SharePoint for today (any status)
       const todayTasks=d.activities.filter(a=>a.ActivityType==="Task"&&actDate(a)&&actDate(a).slice(0,10)===td);
-      const existing=new Set(todayTasks.map(t=>`${t.VAEmail}|${t.Title}`));
-      // Also check what we just loaded as queued (could be from previous days)
-      persistedQueued.forEach(a=>{existing.add(`${a.VAEmail}|${a.Title}`);});
+      // Dedup: check ALL activities for today (any status) - prevents duplicates on reload
+      const existing=new Set(todayTasks.map(t=>`${t.VAEmail?.toLowerCase()}|${t.Title}|${t.PropertyId||""}`));
+      // Also check already-queued/in-progress tasks
+      persistedQueued.forEach(a=>{existing.add(`${a.VAEmail?.toLowerCase()}|${a.Title}|${a.PropertyId||""}`);});
+      // Also check timers in case they started one
+      // Use broader title-only check as secondary safety net
+      const existingTitleProps=new Set(todayTasks.map(t=>`${t.Title}|${t.PropertyId||""}`));
 
       const toSave=[];
       // Group recurring tasks by VA+description — same task across multiple properties = one group
@@ -373,8 +377,8 @@ function App(){
           const targetDow=rt.dayOfWeek!==undefined?rt.dayOfWeek:1;
           if(todayDow!==targetDow)return;
         }
-        const key=`${rt.vaEmail}|${rt.description}`;
-        if(existing.has(key))return;
+        const key=`${rt.vaEmail?.toLowerCase()}|${rt.description}`;
+        if(existing.has(key)||existingTitleProps.has(`${rt.description}|${rt.propertyId||""}`))return;
         const va=d.vas.find(v=>v.Email&&v.Email.toLowerCase()===rt.vaEmail.toLowerCase());
         if(!va)return;
         const prop=rt.propertyId?d.properties.find(p=>p.Title===rt.propertyId):null;
@@ -681,6 +685,28 @@ function App(){
       setCovQ(p=>p.filter(t=>t._localId!==task._localId));
       fl("Task removed");
     }catch(e){fl("Error: "+e.message);}
+  }
+
+  // ── Cleanup Duplicates ──
+  async function cleanupDuplicates(){
+    if(!window.confirm("This will delete duplicate tasks created today, keeping one of each. Continue?"))return;
+    const tk=await gT();
+    const td=today();
+    const d=await loadAll(tk);
+    const todayTasks=d.activities.filter(a=>a.ActivityType==="Task"&&a.ActivityDate&&a.ActivityDate.slice(0,10)===td);
+    const seen=new Map();const toDelete=[];
+    todayTasks.forEach(t=>{
+      const key=`${t.VAEmail?.toLowerCase()}|${t.Title}|${t.PropertyId||""}`;
+      if(seen.has(key)){toDelete.push(t);}
+      else{seen.set(key,t);}
+    });
+    if(!toDelete.length){fl("No duplicates found!");return;}
+    fl(`Removing ${toDelete.length} duplicates...`);
+    let removed=0;
+    for(const t of toDelete){
+      try{await gPatch(tk,iUrl("VA_Activity",t.id),{Status:"Incomplete",Notes:"Duplicate — auto-removed"});removed++;}catch(e){console.warn("[VT] Cleanup failed:",t.id,e.message);}
+    }
+    await reload();fl(`Cleaned up ${removed} duplicate tasks`);
   }
 
   // ── Weekly Report ──
@@ -1684,6 +1710,9 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
       })}
     </div>
 
+    {/* Cleanup Duplicates */}
+    <div style={{...S.card,borderLeft:`3px solid ${C.info}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F9F9}"} Cleanup Duplicates</div><div style={{fontSize:12,color:C.gray400}}>Removes duplicate tasks created today, keeps one of each.</div></div><button style={{...S.btn(C.info),...S.btnSm}} onClick={onCleanup}>Run Cleanup</button></div></div>
+
     {/* Data Sources */}
     <div style={{...S.card,padding:12,background:C.teal50,border:`1px solid ${C.teal100}`}}><div style={{fontSize:12,color:C.teal600}}><strong>Data:</strong> Employees → VAs/PMs/Roles. VA_Properties → property registry. VA_Portfolios → assignments. VA_TrackerConfig → categories/recurring/settings. VA_Activity → tasks/shifts/absences. VA_Guests → guest access. Auth: MSAL + Azure B2B.</div></div>
 
@@ -1707,7 +1736,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
     </div>
 
     {/* Queued Task Management */}
-    {queue.length>0&&<AdminQueuePanel queue={queue} covQ={covQ} data={data} onDeleteTask={onDeleteTask} onCompleteSubTask={onCompleteSubTask}/>}
+    {queue.length>0&&<AdminQueuePanel queue={queue} covQ={covQ} data={data} onDeleteTask={onDeleteTask} onCompleteSubTask={onCompleteSubTask} onCleanup={cleanupDuplicates}/>}
 
     {/* Close Day */}
     <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><button style={S.btn(C.warning,C.dark)} onClick={onCloseDay}>Close Day</button></div></div>
