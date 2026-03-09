@@ -421,15 +421,21 @@ function App(){
       mv.forEach(q=>{q.Source="Coverage";q.CoverageForEmail=va.Email;q.CoverageForName=va.Name;});
       setQueue(rest);setCovQ(p=>[...p,...mv]);fl(`${va.Name} marked OUT — ${mv.length} tasks to coverage`);
     }else{
-      // When marking back IN, move their unclaimed coverage tasks back
-      const returning=covQ.filter(q=>q.CoverageForEmail?.toLowerCase()===va.Email.toLowerCase());
-      for(const task of returning){
-        if(task._spId){try{await gPatch(t,iUrl("VA_Activity",task._spId),{Source:"Daily",VAEmail:va.Email,VAName:va.Name,CoverageForEmail:"",CoverageForName:""});}catch(e){console.warn("[VT] Return patch failed:",e);}}
+      // When marking back IN, fetch their unclaimed coverage tasks from SharePoint
+      // (local covQ may be stale if page was reloaded)
+      const spCov=await gAll(t,`${lUrl("VA_Activity")}?expand=fields&$filter=fields/CoverageForEmail eq '${va.Email}' and fields/Status eq 'Queued'&$top=200`);
+      const spTasks=spCov.map(r=>({id:r.id,...r.fields,_localId:r.id,_spId:r.id}));
+      // PATCH each back to the VA
+      for(const task of spTasks){
+        try{await gPatch(t,iUrl("VA_Activity",task._spId),{Source:"Daily",VAEmail:va.Email,VAName:va.Name,CoverageForEmail:"",CoverageForName:""});}
+        catch(e){console.warn("[VT] Return patch failed:",e);}
       }
-      returning.forEach(q=>{q.Source="Daily";q.CoverageForEmail="";q.CoverageForName="";q.VAEmail=va.Email;q.VAName=va.Name;});
+      // Also handle any in local covQ that weren't in SP yet
+      const localOnly=covQ.filter(q=>q.CoverageForEmail?.toLowerCase()===va.Email.toLowerCase()&&!spTasks.find(s=>s._spId===q._spId));
       setCovQ(p=>p.filter(q=>q.CoverageForEmail?.toLowerCase()!==va.Email.toLowerCase()));
-      setQueue(p=>[...p,...returning]);
-      fl(`${va.Name} marked IN — ${returning.length} tasks returned`);
+      const returned=[...spTasks,...localOnly].map(q=>({...q,Source:"Daily",CoverageForEmail:"",CoverageForName:"",VAEmail:va.Email,VAName:va.Name}));
+      setQueue(p=>[...p,...returned]);
+      fl(`${va.Name} marked IN — ${returned.length} tasks returned`);
     }
     await reload();
     }catch(e){console.error("[VT] toggleAbsence error:",e);fl("Error: "+e.message);}
