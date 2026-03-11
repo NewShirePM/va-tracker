@@ -1721,7 +1721,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
         <div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3F7}\u{FE0F}"} Task Categories</div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();if(!openSections.categories)toggleSection("categories");setShowAddCat(!showAddCat);}}>{showAddCat?"Cancel":"+ Add"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.categories?"▲":"▼"}</span></div>
       </div>
-      {openSections.categories&&<div>}{showAddCat&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
+      {openSections.categories&&<div>{showAddCat&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}>
           <div style={{flex:2,minWidth:150}}><label style={S.label}>Category Name *</label><input style={S.input} value={ncName} onChange={e=>setNcName(e.target.value)} placeholder="e.g., Leasing"/></div>
           <div style={{flex:"0 0 auto"}}><label style={S.label}>Icon — selected: <span style={{fontSize:18}}>{ICON_MAP[ncIcon]||"\u{1F4C1}"}</span></label>
@@ -1764,7 +1764,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
         <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F441}\u{FE0F}"} Guest Access</div><div style={{fontSize:11,color:C.gray400}}>External clients — read-only, filtered to assigned VAs. Requires User.Invite.All permission in Azure Portal.</div></div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.purple),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowAddGuest(!showAddGuest);if(!openSections.guests)toggleSection("guests");}}>{showAddGuest?"Cancel":"+ Invite Guest"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.guests?"▲":"▼"}</span></div>
       </div>
-      {openSections.guests&&<>{showAddGuest&&<div style={{background:C.purpleBg,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.purple}`}}>
+      {openSections.guests&&<div>{showAddGuest&&<div style={{background:C.purpleBg,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.purple}`}}>
         <div style={S.row}>
           <div style={{flex:1,minWidth:140}}><label style={S.label}>Full Name *</label><input style={S.input} value={gName} onChange={e=>setGName(e.target.value)} placeholder="Jane Smith"/></div>
           <div style={{flex:1,minWidth:180}}><label style={S.label}>Email *</label><input style={S.input} value={gEmail} onChange={e=>setGEmail(e.target.value)} placeholder="jane@example.com"/></div>
@@ -1807,7 +1807,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
           </div>}
         </div>;
       })}
-    </></div>}
+    </div>}
 
     {/* Cleanup Duplicates */}
     <div style={{...S.card,borderLeft:`3px solid ${C.info}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("cleanup")}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F9F9}"} Cleanup Duplicates</div><div style={{fontSize:12,color:C.gray400}}>Removes duplicate tasks created today, keeps one of each.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.info),...S.btnSm}} onClick={e=>{e.stopPropagation();onCleanup();}}>Run Cleanup</button><span style={{color:C.gray400,fontSize:12}}>{openSections.cleanup?"▲":"▼"}</span></div></div></></div>
