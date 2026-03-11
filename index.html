@@ -1492,6 +1492,8 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
   // Category management
   const[showAddCat,setShowAddCat]=useState(false);const[ncName,setNcName]=useState("");const[ncIcon,setNcIcon]=useState("folder");
   const[editCatId,setEditCatId]=useState(null);const[ecName,setEcName]=useState("");const[ecIcon,setEcIcon]=useState("folder");const[showEcIcons,setShowEcIcons]=useState(false);
+  const[openSections,setOpenSections]=useState({absence:true,assign:false,recurring:false,portfolio:false,properties:false,categories:false,guests:false,report:false,closeday:true,cleanup:false,queue:false});
+  function toggleSection(k){setOpenSections(p=>({...p,[k]:!p[k]}));}
 
   if(!data)return null;
   const cats=config?.categories||[];const rTasks=config?.recurringTasks||[];
