@@ -1336,9 +1336,9 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
           {activeT.length>0&&<div style={{fontSize:12,color:C.success}}>{activeT.map((a,i)=><div key={i}>{"\u25CF"} {a.Title} (in progress)</div>)}</div>}
         </div>);
       })}
-    </></div>
+    </div>
 
-  {/* Submit task form */}
+    {/* Submit task form */}
     <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
       <div style={S.cardTitle}>{"\u{1F4CC}"} Submit Task for VA</div>
       <div style={{fontSize:12,color:C.gray400,marginBottom:12}}>Select a property — the task auto-routes to the assigned VA.</div>
@@ -1802,11 +1802,12 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
         </div>;
       })}
     </div>}
+    </div>
 
     {/* Cleanup Duplicates */}
-    <div style={{...S.card,borderLeft:`3px solid ${C.info}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("cleanup")}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F9F9}"} Cleanup Duplicates</div><div style={{fontSize:12,color:C.gray400}}>Removes duplicate tasks created today, keeps one of each.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.info),...S.btnSm}} onClick={e=>{e.stopPropagation();onCleanup();}}>Run Cleanup</button><span style={{color:C.gray400,fontSize:12}}>{openSections.cleanup?"▲":"▼"}</span></div></div></></div>
+    <div style={{...S.card,borderLeft:`3px solid ${C.info}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("cleanup")}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F9F9}"} Cleanup Duplicates</div><div style={{fontSize:12,color:C.gray400}}>Removes duplicate tasks created today, keeps one of each.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.info),...S.btnSm}} onClick={e=>{e.stopPropagation();onCleanup();}}>Run Cleanup</button><span style={{color:C.gray400,fontSize:12}}>{openSections.cleanup?"▲":"▼"}</span></div></div></div>
 
-     Backdate In Progress */}
+    {/* Backdate In Progress */}
     <BackdatePanel data={data} onBackdate={onBackdate}/>
 
     {/* Data Sources */}
