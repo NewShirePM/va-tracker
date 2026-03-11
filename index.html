@@ -493,17 +493,18 @@ function App(){
   }
 
   // ── Backdate complete ──
-  async function backdateFinish(id,backdateStr,status,notes){
+  async function backdateFinish(id,estHours,status,notes){
     const t=timers.find(x=>x._localId===id);if(!t)return;
-    const endDt=new Date(backdateStr+"T23:59:00");
-    const startDt=t.StartTime?new Date(t.StartTime):endDt;
-    const dur=Math.max(1,Math.round((endDt-startDt)/6e4));
-    const fields={Status:status,EndTime:endDt.toISOString(),ActivityDate:backdateStr,DurationMin:dur,PausedMin:0,Notes:notes||""};
+    const durMin=Math.max(1,Math.round(parseFloat(estHours)*60));
+    // Use StartTime's date as ActivityDate so it lands on the right day
+    const actDate=t.StartTime?t.StartTime.slice(0,10):new Date().toISOString().slice(0,10);
+    const endDt=t.StartTime?new Date(new Date(t.StartTime).getTime()+durMin*60000):new Date();
+    const fields={Status:status,EndTime:endDt.toISOString(),ActivityDate:actDate,DurationMin:durMin,PausedMin:0,Notes:notes||""};
     try{
       const tk=await gT();
       if(t._spId){await gPatch(tk,iUrl("VA_Activity",t._spId),fields);}
       else{await saveTask({...t,...fields});}
-      setTimers(p=>p.filter(x=>x._localId!==id));fl("Task backdated & completed!");await reload();
+      setTimers(p=>p.filter(x=>x._localId!==id));fl("Task completed — "+durMin+"m logged!");await reload();
     }catch(e){fl("Error: "+e.message);}
   }
 
@@ -724,6 +725,28 @@ function App(){
     await reload();fl(`Cleaned up ${removed} duplicate tasks`);
   }
 
+  // ── Backdate tasks ──
+  async function backdateTasks(taskIds, completedDate, status){
+    const tk=await gT();
+    const endTs=new Date(completedDate+"T23:59:00").toISOString();
+    let count=0;
+    for(const id of taskIds){
+      try{
+        await gPatch(tk,iUrl("VA_Activity",id),{
+          Status:status||"Completed",
+          ActivityDate:completedDate,
+          EndTime:status==="Completed"?endTs:null,
+          Notes:status==="Incomplete"?"Not completed (backdated)":"Backdated completion"
+        });
+        count++;
+      }catch(e){console.warn("[VT] Backdate failed:",id,e.message);}
+    }
+    // Also remove from timers state if they were In Progress
+    setTimers(p=>p.filter(t=>!taskIds.includes(t._spId)));
+    await reload();
+    fl(`Updated ${count} tasks to ${completedDate}`);
+  }
+
   // ── Weekly Report ──
   function generateWeeklyReport(){
     if(!data)return null;
@@ -917,7 +940,7 @@ function App(){
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} guestVAEmails={guestVAEmails}/>}
         {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks}/>}
       </div>
     </div>
   );
@@ -1256,9 +1279,16 @@ function ActiveView({timers:tms,tick,isMgr,readOnly,onPause,onResume,onFinish,on
       </div>
       {!readOnly&&<div style={{display:"flex",gap:6,padding:"0 16px 12px",flexWrap:"wrap"}}>
         {ip?<button style={{...S.btn(C.success),flex:1}} onClick={()=>onResume(t._localId)}>{"\u25B6"} Resume</button>:<button style={{...S.btnO(C.warning,C.warning),flex:1}} onClick={()=>onPause(t._localId)}>{"\u23F8"} Pause</button>}
-        <button style={{...S.btn(C.success),flex:1}} onClick={()=>{const n=prompt("Notes (optional):");onFinish(t._localId,"Completed",n||"");}}>{"\u2713"} Done</button>
+        <button style={{...S.btn(C.success),flex:1}} onClick={()=>{
+          const n=prompt("Notes (optional):");
+          const defaultDate=t.StartTime?new Date(t.StartTime).toISOString().slice(0,10):today();
+          const d=prompt("Completion date (YYYY-MM-DD):\nLeave blank for today, or enter a past date:",defaultDate);
+          if(d===null)return;
+          const useDate=(d.trim()&&d.trim()!==today())?d.trim():null;
+          onFinish(t._localId,"Completed",n||"",useDate);
+        }}>{"\u2713"} Done</button>
         <button style={{...S.btnO(C.error,C.error),padding:"9px 12px"}} onClick={()=>{const n=prompt("What's blocking?");if(n)onFinish(t._localId,"Blocked",n);}}>{"\u26A0"}</button>
-        <button style={{...S.btnO(C.gold600,C.gold100),padding:"9px 12px",fontWeight:600,fontSize:11}} title="Backdate complete" onClick={()=>{const d=prompt("Completion date (YYYY-MM-DD):",new Date(t.StartTime||Date.now()).toISOString().slice(0,10));if(!d||!d.match(/^\d{4}-\d{2}-\d{2}$/))return;const n=prompt("Notes (optional):");onBackdate(t._localId,d,"Completed",n||"");}}>{"\u{1F4C5}"}</button>
+        <button style={{...S.btnO(C.gold600,C.gold100),padding:"9px 12px",fontWeight:600,fontSize:11}} title="Backdate complete" onClick={()=>{const h=prompt("Estimated hours spent on this task (e.g. 0.5, 1, 2.5):");if(!h||isNaN(parseFloat(h))||parseFloat(h)<=0)return;const n=prompt("Notes (optional):");onBackdate(t._localId,h,"Completed",n||"");}}>{"\u{1F4C5}"}</button>
         <button style={{...S.btnO(C.gray400,C.gray200),padding:"9px 12px"}} onClick={()=>onCancel(t._localId)}>{"\u21A9"}</button>
       </div>}</div>);})}</div>);
 }
@@ -1306,9 +1336,9 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
           {activeT.length>0&&<div style={{fontSize:12,color:C.success}}>{activeT.map((a,i)=><div key={i}>{"\u25CF"} {a.Title} (in progress)</div>)}</div>}
         </div>);
       })}
-    </div>
+    </></div>
 
-    {/* Submit task form */}
+  {/* Submit task form */}
     <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
       <div style={S.cardTitle}>{"\u{1F4CC}"} Submit Task for VA</div>
       <div style={{fontSize:12,color:C.gray400,marginBottom:12}}>Select a property — the task auto-routes to the assigned VA.</div>
@@ -1408,9 +1438,58 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps,guestVAs})
 }
 
 // ============================================================
+// BACKDATE PANEL
+// ============================================================
+function BackdatePanel({data,onBackdate}){
+  const[selDate,setSelDate]=useState(()=>{const d=new Date();d.setDate(d.getDate()-1);return d.toISOString().slice(0,10);});
+  const[selStatus,setSelStatus]=useState("Completed");
+  const[selIds,setSelIds]=useState([]);
+
+  if(!data)return null;
+  const stale=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status==="In Progress");
+  if(!stale.length)return null;
+
+  function toggle(id){setSelIds(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);}
+  function selectAll(){setSelIds(stale.map(a=>a.id));}
+
+  return(
+    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}>
+      <div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:4}}>{"\u{1F4C5}"} Backdate Stale Tasks</div>
+      <div style={{fontSize:12,color:C.gray400,marginBottom:12}}>{stale.length} task{stale.length!==1?"s":""} stuck as In Progress — select tasks, choose a date, and mark them.</div>
+      <div style={{...S.row,marginBottom:10,alignItems:"flex-end"}}>
+        <div><label style={S.label}>Completion Date</label><input type="date" style={{...S.input,width:160}} value={selDate} onChange={e=>setSelDate(e.target.value)} max={today()}/></div>
+        <div><label style={S.label}>Mark As</label><select style={{...S.select,width:140}} value={selStatus} onChange={e=>setSelStatus(e.target.value)}><option value="Completed">Completed</option><option value="Incomplete">Incomplete</option><option value="Blocked">Blocked</option></select></div>
+        <button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm}} onClick={selectAll}>Select All</button>
+        <button style={{...S.btn(selIds.length?C.warning:C.gray300,C.dark),...S.btnSm,opacity:selIds.length?1:0.5}} onClick={()=>{if(!selIds.length)return;if(window.confirm(`Mark ${selIds.length} task(s) as ${selStatus} on ${selDate}?`))onBackdate(selIds,selDate,selStatus);setSelIds([]);}}>
+          Apply
+        </button>
+      </div>
+      {stale.map(a=>(
+        <label key={a.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:`1px solid ${C.gray100}`,cursor:"pointer"}}>
+          <input type="checkbox" checked={selIds.includes(a.id)} onChange={()=>toggle(a.id)}/>
+          <span style={{fontSize:13,fontWeight:500,color:C.teal700,flex:1}}>{a.Title}</span>
+          <span style={{fontSize:11,color:C.gray400}}>{a.VAName}</span>
+          <span style={{fontSize:11,color:C.gray400}}>{a.PropertyName||"General"}</span>
+          <span style={{fontSize:11,color:C.warning}}>{a.StartTime?new Date(a.StartTime).toLocaleDateString("en-US",{month:"short",day:"numeric"}):"?"}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+
+// ============================================================
 // ADMIN VIEW
 // ============================================================
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate}){
+  const[openSections,setOpenSections]=useState({absence:true,assign:false,recurring:false,portfolio:false,properties:false,categories:false,guests:false,report:false,queue:false,cleanup:false,closeday:true});
+  function toggleSection(k){setOpenSections(p=>({...p,[k]:!p[k]}));}
+  const SectionHeader=({skey,title,badge})=>(
+    <div onClick={()=>toggleSection(skey)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",userSelect:"none"}}>
+      <div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{title}{badge&&<span style={{marginLeft:8,fontSize:12,fontWeight:400,color:C.gray400}}>({badge})</span>}</div>
+      <span style={{fontSize:14,color:C.gray400,transform:openSections[skey]?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s",display:"inline-block"}}>{"\u25BC"}</span>
+    </div>
+  );
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
@@ -1482,16 +1561,18 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
   return(<div>
     {/* Absence */}
     <div style={{...S.card,borderLeft:`3px solid ${C.error}`}}>
-      <div style={S.cardTitle}>{"\u{1F6D1}"} VA Absence Management</div>
+      <SectionHeader skey="absence" title={"\u{1F6D1} VA Absence Management"} badge={data.vas.filter(v=>v.VATrackerStatus==="Out").length>0?data.vas.filter(v=>v.VATrackerStatus==="Out").length+" out":null}/>
+      {openSections.absence&&<div style={{marginTop:12}}>
       {data.vas.map(va=><div key={va.Email} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
         <div><div style={{fontSize:14,fontWeight:600,color:getVAStatus(va)==="Out"?C.error:C.teal700}}>{va.Name}</div><div style={{fontSize:11,color:C.gray400}}>{data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase()).length} properties</div></div>
         <div style={{display:"flex",alignItems:"center",gap:6}}><Badge type={getVAStatus(va)==="Out"?"error":"success"}>{getVAStatus(va)}</Badge><button style={{...(getVAStatus(va)==="Out"?S.btn(C.success):S.btn(C.error)),...S.btnSm}} onClick={()=>onToggleAbsence(va)}>{getVAStatus(va)==="Out"?"Mark In":"Mark Out"}</button><button style={{...S.btnO(C.info,C.info),...S.btnSm,fontSize:10}} onClick={()=>onRecoverTasks(va)} title="Recover any coverage tasks back to this VA">↩ Recover</button></div></div>)}
       {covQ.length>0&&<div style={{marginTop:10,padding:8,background:C.warningBg,borderRadius:4,fontSize:12,color:C.warning}}>{"\u26A0"} {covQ.length} unclaimed coverage tasks</div>}
-    </div>
+    </div>}</div>
 
     {/* Assign */}
     <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CC}"} Assign Task</div></div><button style={S.btn(C.gold500,C.dark)} onClick={()=>setShowAssign(!showAssign)}>{showAssign?"Cancel":"Assign"}</button></div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("assign")}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CC}"} Assign Task</div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.gold500,C.dark),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowAssign(!showAssign);toggleSection("assign",true)}}>{showAssign?"Cancel":"Assign"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.assign?"▲":"▼"}</span></div></div>
+      {openSections.assign&&<div style={{marginTop:12}}>
       {showAssign&&<div style={{marginTop:14}}>
         <div style={S.row}><div style={{flex:1,minWidth:140}}><label style={S.label}>VA *</label><select style={S.select} value={aVa} onChange={e=>{setAVa(e.target.value);setAProps([]);}}><option value="">Select...</option>{data.vas.filter(v=>v.VATrackerStatus!=="Out").map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <div style={{flex:1,minWidth:140}}><label style={S.label}>Category *</label><select style={S.select} value={aCat} onChange={e=>setACat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
@@ -1506,11 +1587,12 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
         <div style={{marginTop:8}}><label style={S.label}>Notes</label><input style={S.input} value={aNotes} onChange={e=>setANotes(e.target.value)} placeholder="Context for the VA (optional)"/></div>
         <button style={{...S.btn(C.headerBg),width:"100%",marginTop:10}} onClick={handleAssign}>{"\u{1F4CC}"} {aProps.length>1?`Add ${aProps.length} Tasks`:"Add to Queue"}</button>
       </div>}
-    </div>
+    </div>}</div>
 
     {/* Recurring */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Recurring Tasks</div><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={()=>setShowRec(!showRec)}>{showRec?"Cancel":"+ Add"}</button></div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("recurring")}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Recurring Tasks</div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();if(!openSections.recurring)toggleSection("recurring");setShowRec(!showRec);}}>{showRec?"Cancel":"+ Add"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.recurring?"▲":"▼"}</span></div></div>
+      {openSections.recurring&&<div style={{marginTop:4}}>
       {showRec&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}><div style={{flex:1,minWidth:130}}><label style={S.label}>VA *</label><select style={S.select} value={rVa} onChange={e=>{setRVa(e.target.value);setRProps([]);}}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <div style={{flex:1,minWidth:130}}><label style={S.label}>Category *</label><select style={S.select} value={rCat} onChange={e=>setRCat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
@@ -1596,11 +1678,12 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
           })}
         </div>;
       })}
-    </div>
+    </div>}</div>
 
     {/* Portfolio */}
     <div style={S.card}>
-      <div style={S.cardTitle}>{"\u{1F3E0}"} Portfolio Assignments</div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",paddingBottom:openSections.portfolio?10:0,borderBottom:openSections.portfolio?`1px solid ${C.gray100}`:"none",marginBottom:openSections.portfolio?12:0}} onClick={()=>toggleSection("portfolio")}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3E0}"} Portfolio Assignments</div><span style={{color:C.gray400,fontSize:12}}>{openSections.portfolio?"▲":"▼"}</span></div>
+      {openSections.portfolio&&<div>
       <div style={{background:C.teal50,borderRadius:6,padding:12,marginBottom:14,border:`1px solid ${C.teal100}`,display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
         <div style={{flex:1,minWidth:140}}><label style={{...S.label,fontSize:11}}>VA</label><select style={S.select} value={portVa} onChange={e=>setPortVa(e.target.value)}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
         <div style={{flex:1,minWidth:180}}><label style={{...S.label,fontSize:11}}>Property</label><select style={S.select} value={portProp} onChange={e=>setPortProp(e.target.value)}><option value="">Select...</option>{data.properties.filter(p=>!portVa||!data.portfolios.some(pt=>pt.VAEmail?.toLowerCase()===portVa.toLowerCase()&&pt.PropertyId===p.Title)).map(p=>{const a=data.portfolios.find(pt=>pt.PropertyId===p.Title);return<option key={p.Title} value={p.Title}>{p.PropertyName} ({p.Units}u){a?` — ${a.VAName}`:""}</option>;})}</select></div>
@@ -1611,12 +1694,12 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
           {!vp.length&&<div style={{fontSize:12,color:C.gray400,fontStyle:"italic",padding:"4px 0"}}>None assigned</div>}
           {vp.map(p=>{const pr=data.properties.find(x=>x.Title===p.PropertyId);return<div key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:`1px solid ${C.gray100}`}}><span>{"\u{1F3E0}"}</span><div style={{flex:1}}><div style={{fontSize:12,fontWeight:500,color:C.teal700}}>{pr?.PropertyName||p.PropertyName}</div><div style={{fontSize:10,color:C.gray400}}>{pr?.Units||"?"}u · {pr?.PMName||"?"}</div></div><button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>{if(window.confirm(`Remove ${pr?.PropertyName} from ${va.Name}?`))onUnassignProp(p.id,pr?.PropertyName||p.PropertyName,va.Name);}}>Remove</button></div>;})}</div>;})}
       {(()=>{const aIds=new Set(data.portfolios.map(p=>p.PropertyId));const un=data.properties.filter(p=>!aIds.has(p.Title));if(!un.length)return null;return<div style={{padding:10,background:C.warningBg,borderRadius:6,marginTop:8}}><div style={{fontSize:12,fontWeight:600,color:C.warning,marginBottom:4}}>{"\u26A0"} Unassigned ({un.length})</div>{un.map(p=><div key={p.Title} style={{fontSize:12,color:C.gray600,padding:"2px 0"}}>{p.PropertyName} ({p.Units}u) — {p.PMName}</div>)}</div>;})()}
-    </div>
+    </div>}</div>
 
     {/* Property Management */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3D7}\u{FE0F}"} Property Management</div><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={()=>setShowAddProp(!showAddProp)}>{showAddProp?"Cancel":"+ Add Property"}</button></div>
-      {showAddProp&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10,cursor:"pointer"}} onClick={()=>toggleSection("properties")}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3D7}\u{FE0F}"} Property Management</div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();if(!openSections.properties)toggleSection("properties");setShowAddProp(!showAddProp);}}>{showAddProp?"Cancel":"+ Add Property"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.properties?"▲":"▼"}</span></div></div>
+      {openSections.properties&&<div>{showAddProp&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}><div style={{flex:2,minWidth:150}}><label style={S.label}>Name *</label><input style={S.input} value={npName} onChange={e=>setNpName(e.target.value)} placeholder="Property name"/></div><div style={{flex:1,minWidth:100}}><label style={S.label}>Group *</label><select style={S.select} value={npGroup} onChange={e=>setNpGroup(e.target.value)}><option>Multifamily</option><option>Single Family</option><option>Lease-Up</option></select></div><div style={{minWidth:70}}><label style={S.label}>Units *</label><input style={S.input} type="number" value={npUnits} onChange={e=>setNpUnits(e.target.value)} placeholder="#"/></div></div>
         <div style={{marginTop:10}}><label style={S.label}>Property Manager *</label><select style={S.select} value={npPm} onChange={e=>setNpPm(e.target.value)}><option value="">Select PM...</option>{data.pms.map(pm=><option key={pm.Email} value={pm.Email}>{pm.Name}</option>)}</select></div>
         <button style={{...S.btn(C.success),width:"100%",marginTop:10}} onClick={()=>{if(!npName||!npUnits||!npPm)return;const pm=data.pms.find(p=>p.Email===npPm);onAddProperty({name:npName,group:npGroup,units:parseInt(npUnits)||0,pmEmail:npPm,pmName:pm?.Name||npPm});setNpName("");setNpUnits("");setNpPm("");setShowAddProp(false);}}>{"\u2713"} Add Property</button>
@@ -1630,15 +1713,15 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
             <td style={{...S.td,fontSize:12}}>{va?va.Name:<span style={{color:C.gray400,fontStyle:"italic"}}>Unassigned</span>}</td>
             <td style={S.td}>{isEd?<div style={{display:"flex",gap:3}}><button style={{...S.btn(C.success),...S.btnSm,padding:"3px 8px"}} onClick={()=>{onEditProperty(p.id,{PropertyName:epName,Units:parseInt(epUnits)||p.Units});setEditPropId(null);}}>{"\u2713"}</button><button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm,padding:"3px 8px"}} onClick={()=>setEditPropId(null)}>{"\u2715"}</button></div>:<div style={{display:"flex",gap:3}}><button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>{setEditPropId(p.id);setEpName(p.PropertyName);setEpUnits(String(p.Units||0));}}>Edit</button><button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>onDeactivateProperty(p.id,p.PropertyName)}>Deactivate</button></div>}</td></tr>;
         })}</tbody></table></div>
-    </div>
+    </div>}</div>
 
     {/* Category Management */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10,cursor:"pointer"}} onClick={()=>toggleSection("categories")}>
         <div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3F7}\u{FE0F}"} Task Categories</div>
-        <button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={()=>setShowAddCat(!showAddCat)}>{showAddCat?"Cancel":"+ Add"}</button>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();if(!openSections.categories)toggleSection("categories");setShowAddCat(!showAddCat);}}>{showAddCat?"Cancel":"+ Add"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.categories?"▲":"▼"}</span></div>
       </div>
-      {showAddCat&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
+      {openSections.categories&&<div>}{showAddCat&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}>
           <div style={{flex:2,minWidth:150}}><label style={S.label}>Category Name *</label><input style={S.input} value={ncName} onChange={e=>setNcName(e.target.value)} placeholder="e.g., Leasing"/></div>
           <div style={{flex:"0 0 auto"}}><label style={S.label}>Icon — selected: <span style={{fontSize:18}}>{ICON_MAP[ncIcon]||"\u{1F4C1}"}</span></label>
@@ -1673,15 +1756,15 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
           </div>}
         </div>;
       })}
-    </div>
+    </div>}</div>
 
     {/* Guest Management */}
     <div style={{...S.card,borderLeft:`3px solid ${C.purple}`}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10,cursor:"pointer"}} onClick={()=>toggleSection("guests")}>
         <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F441}\u{FE0F}"} Guest Access</div><div style={{fontSize:11,color:C.gray400}}>External clients — read-only, filtered to assigned VAs. Requires User.Invite.All permission in Azure Portal.</div></div>
-        <button style={{...S.btn(C.purple),...S.btnSm}} onClick={()=>setShowAddGuest(!showAddGuest)}>{showAddGuest?"Cancel":"+ Invite Guest"}</button>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.purple),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowAddGuest(!showAddGuest);if(!openSections.guests)toggleSection("guests");}}>{showAddGuest?"Cancel":"+ Invite Guest"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.guests?"▲":"▼"}</span></div>
       </div>
-      {showAddGuest&&<div style={{background:C.purpleBg,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.purple}`}}>
+      {openSections.guests&&<>{showAddGuest&&<div style={{background:C.purpleBg,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.purple}`}}>
         <div style={S.row}>
           <div style={{flex:1,minWidth:140}}><label style={S.label}>Full Name *</label><input style={S.input} value={gName} onChange={e=>setGName(e.target.value)} placeholder="Jane Smith"/></div>
           <div style={{flex:1,minWidth:180}}><label style={S.label}>Email *</label><input style={S.input} value={gEmail} onChange={e=>setGEmail(e.target.value)} placeholder="jane@example.com"/></div>
@@ -1724,24 +1807,27 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
           </div>}
         </div>;
       })}
-    </div>
+    </></div>}
 
     {/* Cleanup Duplicates */}
-    <div style={{...S.card,borderLeft:`3px solid ${C.info}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F9F9}"} Cleanup Duplicates</div><div style={{fontSize:12,color:C.gray400}}>Removes duplicate tasks created today, keeps one of each.</div></div><button style={{...S.btn(C.info),...S.btnSm}} onClick={onCleanup}>Run Cleanup</button></div></div>
+    <div style={{...S.card,borderLeft:`3px solid ${C.info}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("cleanup")}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F9F9}"} Cleanup Duplicates</div><div style={{fontSize:12,color:C.gray400}}>Removes duplicate tasks created today, keeps one of each.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.info),...S.btnSm}} onClick={e=>{e.stopPropagation();onCleanup();}}>Run Cleanup</button><span style={{color:C.gray400,fontSize:12}}>{openSections.cleanup?"▲":"▼"}</span></div></div></></div>
+
+     Backdate In Progress */}
+    <BackdatePanel data={data} onBackdate={onBackdate}/>
 
     {/* Data Sources */}
     <div style={{...S.card,padding:12,background:C.teal50,border:`1px solid ${C.teal100}`}}><div style={{fontSize:12,color:C.teal600}}><strong>Data:</strong> Employees → VAs/PMs/Roles. VA_Properties → property registry. VA_Portfolios → assignments. VA_TrackerConfig → categories/recurring/settings. VA_Activity → tasks/shifts/absences. VA_Guests → guest access. Auth: MSAL + Azure B2B.</div></div>
 
     {/* Weekly Report */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10,cursor:"pointer"}} onClick={()=>toggleSection("report")}>
         <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CA}"} Weekly Report</div><div style={{fontSize:12,color:C.gray400}}>Previous week's performance summary</div></div>
         <button style={S.btn(C.headerBg)} onClick={()=>{
           const r=generateReport();if(!r)return;
           const blob=new Blob([r.report],{type:"text/plain"});
           const url=URL.createObjectURL(blob);const a=document.createElement("a");
           a.href=url;a.download=`VA-Weekly-Report-${r.from}-to-${r.to}.txt`;a.click();URL.revokeObjectURL(url);
-        }}>{"\u{1F4E5}"} Download Report</button>
+        }}>{"\u{1F4E5}"} Download Report</button><span style={{color:C.gray400,fontSize:12}}>{openSections.report?"▲":"▼"}</span>
       </div>
       <button style={{...S.btnO(C.teal600,C.teal100),width:"100%"}} onClick={()=>{
         const r=generateReport();if(!r)return;
@@ -1755,7 +1841,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
     {queue.length>0&&<AdminQueuePanel queue={queue} covQ={covQ} data={data} onDeleteTask={onDeleteTask} onCompleteSubTask={onCompleteSubTask}/>}
 
     {/* Close Day */}
-    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><button style={S.btn(C.warning,C.dark)} onClick={onCloseDay}>Close Day</button></div></div>
+    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("closeday")}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={S.btn(C.warning,C.dark)} onClick={e=>{e.stopPropagation();onCloseDay();}}>Close Day</button><span style={{color:C.gray400,fontSize:12}}>{openSections.closeday?"▲":"▼"}</span></div></div></div>
   </div>);
 }
 
