@@ -1484,12 +1484,6 @@ function BackdatePanel({data,onBackdate}){
 function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate}){
   const[openSections,setOpenSections]=useState({absence:true,assign:false,recurring:false,portfolio:false,properties:false,categories:false,guests:false,report:false,queue:false,cleanup:false,closeday:true});
   function toggleSection(k){setOpenSections(p=>({...p,[k]:!p[k]}));}
-  const SectionHeader=({skey,title,badge})=>(
-    <div onClick={()=>toggleSection(skey)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",userSelect:"none"}}>
-      <div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{title}{badge&&<span style={{marginLeft:8,fontSize:12,fontWeight:400,color:C.gray400}}>({badge})</span>}</div>
-      <span style={{fontSize:14,color:C.gray400,transform:openSections[skey]?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s",display:"inline-block"}}>{"\u25BC"}</span>
-    </div>
-  );
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
@@ -1561,7 +1555,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
   return(<div>
     {/* Absence */}
     <div style={{...S.card,borderLeft:`3px solid ${C.error}`}}>
-      <SectionHeader skey="absence" title={"\u{1F6D1} VA Absence Management"} badge={data.vas.filter(v=>v.VATrackerStatus==="Out").length>0?data.vas.filter(v=>v.VATrackerStatus==="Out").length+" out":null}/>
+      <div onClick={()=>toggleSection("absence")} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",paddingBottom:10,borderBottom:,marginBottom:openSections.absence?12:0}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F6D1}"} VA Absence Management</div><div style={{display:"flex",alignItems:"center",gap:8}}>{data.vas.filter(v=>v.VATrackerStatus==="Out").length>0&&<span style={{fontSize:11,fontWeight:600,color:C.error}}>{data.vas.filter(v=>v.VATrackerStatus==="Out").length} out</span>}<span style={{color:C.gray400,fontSize:12}}>{openSections.absence?"▲":"▼"}</span></div></div>
       {openSections.absence&&<div style={{marginTop:12}}>
       {data.vas.map(va=><div key={va.Email} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
         <div><div style={{fontSize:14,fontWeight:600,color:getVAStatus(va)==="Out"?C.error:C.teal700}}>{va.Name}</div><div style={{fontSize:11,color:C.gray400}}>{data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase()).length} properties</div></div>
@@ -1841,7 +1835,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
     {queue.length>0&&<AdminQueuePanel queue={queue} covQ={covQ} data={data} onDeleteTask={onDeleteTask} onCompleteSubTask={onCompleteSubTask}/>}
 
     {/* Close Day */}
-    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("closeday")}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={S.btn(C.warning,C.dark)} onClick={e=>{e.stopPropagation();onCloseDay();}}>Close Day</button><span style={{color:C.gray400,fontSize:12}}>{openSections.closeday?"▲":"▼"}</span></div></div></div></div>
+    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("closeday")}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={S.btn(C.warning,C.dark)} onClick={e=>{e.stopPropagation();onCloseDay();}}>Close Day</button><span style={{color:C.gray400,fontSize:12}}>{openSections.closeday?"▲":"▼"}</span></div></div>
   </div>);
 }
 
