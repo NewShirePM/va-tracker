@@ -1482,8 +1482,6 @@ function BackdatePanel({data,onBackdate}){
 // ADMIN VIEW
 // ============================================================
 function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate}){
-  const[openSections,setOpenSections]=useState({absence:true,assign:false,recurring:false,portfolio:false,properties:false,categories:false,guests:false,report:false,queue:false,cleanup:false,closeday:true});
-  function toggleSection(k){setOpenSections(p=>({...p,[k]:!p[k]}));}
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
@@ -1555,7 +1553,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
   return(<div>
     {/* Absence */}
     <div style={{...S.card,borderLeft:`3px solid ${C.error}`}}>
-      <div onClick={()=>toggleSection("absence")} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",paddingBottom:10,borderBottom:,marginBottom:openSections.absence?12:0}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F6D1}"} VA Absence Management</div><div style={{display:"flex",alignItems:"center",gap:8}}>{data.vas.filter(v=>v.VATrackerStatus==="Out").length>0&&<span style={{fontSize:11,fontWeight:600,color:C.error}}>{data.vas.filter(v=>v.VATrackerStatus==="Out").length} out</span>}<span style={{color:C.gray400,fontSize:12}}>{openSections.absence?"▲":"▼"}</span></div></div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:12}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F6D1}"} VA Absence Management</div><div style={{display:"flex",alignItems:"center",gap:8}}>{data.vas.filter(v=>v.VATrackerStatus==="Out").length>0&&<span style={{fontSize:11,fontWeight:600,color:C.error}}>{data.vas.filter(v=>v.VATrackerStatus==="Out").length} out</span>}</div></div>
       {openSections.absence&&<div style={{marginTop:12}}>
       {data.vas.map(va=><div key={va.Email} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
         <div><div style={{fontSize:14,fontWeight:600,color:getVAStatus(va)==="Out"?C.error:C.teal700}}>{va.Name}</div><div style={{fontSize:11,color:C.gray400}}>{data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase()).length} properties</div></div>
@@ -1565,8 +1563,8 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
 
     {/* Assign */}
     <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("assign")}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CC}"} Assign Task</div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.gold500,C.dark),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowAssign(!showAssign);toggleSection("assign",true)}}>{showAssign?"Cancel":"Assign"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.assign?"▲":"▼"}</span></div></div>
-      {openSections.assign&&<div style={{marginTop:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CC}"} Assign Task</div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.gold500,C.dark),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowAssign(!showAssign)}}>{showAssign?"Cancel":"Assign"}</button></div></div>
+      
       {showAssign&&<div style={{marginTop:14}}>
         <div style={S.row}><div style={{flex:1,minWidth:140}}><label style={S.label}>VA *</label><select style={S.select} value={aVa} onChange={e=>{setAVa(e.target.value);setAProps([]);}}><option value="">Select...</option>{data.vas.filter(v=>v.VATrackerStatus!=="Out").map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <div style={{flex:1,minWidth:140}}><label style={S.label}>Category *</label><select style={S.select} value={aCat} onChange={e=>setACat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
@@ -1580,13 +1578,13 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
         <div style={{marginTop:10}}><label style={S.label}>Task *</label><input style={S.input} value={aDesc} onChange={e=>setADesc(e.target.value)} placeholder="What needs to be done..."/></div>
         <div style={{marginTop:8}}><label style={S.label}>Notes</label><input style={S.input} value={aNotes} onChange={e=>setANotes(e.target.value)} placeholder="Context for the VA (optional)"/></div>
         <button style={{...S.btn(C.headerBg),width:"100%",marginTop:10}} onClick={handleAssign}>{"\u{1F4CC}"} {aProps.length>1?`Add ${aProps.length} Tasks`:"Add to Queue"}</button>
-      </div>}
-    </div>}</div>
+    </div>
+    </div>
 
     {/* Recurring */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("recurring")}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Recurring Tasks</div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();if(!openSections.recurring)toggleSection("recurring");setShowRec(!showRec);}}>{showRec?"Cancel":"+ Add"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.recurring?"▲":"▼"}</span></div></div>
-      {openSections.recurring&&<div style={{marginTop:4}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Recurring Tasks</div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowRec(!showRec);}}>{showRec?"Cancel":"+ Add"}</button></div></div>
+      
       {showRec&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}><div style={{flex:1,minWidth:130}}><label style={S.label}>VA *</label><select style={S.select} value={rVa} onChange={e=>{setRVa(e.target.value);setRProps([]);}}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <div style={{flex:1,minWidth:130}}><label style={S.label}>Category *</label><select style={S.select} value={rCat} onChange={e=>setRCat(e.target.value)}><option value="">Select...</option>{sCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
@@ -1672,12 +1670,12 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
           })}
         </div>;
       })}
-    </div>}</div>
+    </div>
 
     {/* Portfolio */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",paddingBottom:openSections.portfolio?10:0,borderBottom:openSections.portfolio?`1px solid ${C.gray100}`:"none",marginBottom:openSections.portfolio?12:0}} onClick={()=>toggleSection("portfolio")}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3E0}"} Portfolio Assignments</div><span style={{color:C.gray400,fontSize:12}}>{openSections.portfolio?"▲":"▼"}</span></div>
-      {openSections.portfolio&&<div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:12}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3E0}"} Portfolio Assignments</div></div>
+      
       <div style={{background:C.teal50,borderRadius:6,padding:12,marginBottom:14,border:`1px solid ${C.teal100}`,display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
         <div style={{flex:1,minWidth:140}}><label style={{...S.label,fontSize:11}}>VA</label><select style={S.select} value={portVa} onChange={e=>setPortVa(e.target.value)}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
         <div style={{flex:1,minWidth:180}}><label style={{...S.label,fontSize:11}}>Property</label><select style={S.select} value={portProp} onChange={e=>setPortProp(e.target.value)}><option value="">Select...</option>{data.properties.filter(p=>!portVa||!data.portfolios.some(pt=>pt.VAEmail?.toLowerCase()===portVa.toLowerCase()&&pt.PropertyId===p.Title)).map(p=>{const a=data.portfolios.find(pt=>pt.PropertyId===p.Title);return<option key={p.Title} value={p.Title}>{p.PropertyName} ({p.Units}u){a?` — ${a.VAName}`:""}</option>;})}</select></div>
@@ -1688,12 +1686,12 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
           {!vp.length&&<div style={{fontSize:12,color:C.gray400,fontStyle:"italic",padding:"4px 0"}}>None assigned</div>}
           {vp.map(p=>{const pr=data.properties.find(x=>x.Title===p.PropertyId);return<div key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:`1px solid ${C.gray100}`}}><span>{"\u{1F3E0}"}</span><div style={{flex:1}}><div style={{fontSize:12,fontWeight:500,color:C.teal700}}>{pr?.PropertyName||p.PropertyName}</div><div style={{fontSize:10,color:C.gray400}}>{pr?.Units||"?"}u · {pr?.PMName||"?"}</div></div><button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>{if(window.confirm(`Remove ${pr?.PropertyName} from ${va.Name}?`))onUnassignProp(p.id,pr?.PropertyName||p.PropertyName,va.Name);}}>Remove</button></div>;})}</div>;})}
       {(()=>{const aIds=new Set(data.portfolios.map(p=>p.PropertyId));const un=data.properties.filter(p=>!aIds.has(p.Title));if(!un.length)return null;return<div style={{padding:10,background:C.warningBg,borderRadius:6,marginTop:8}}><div style={{fontSize:12,fontWeight:600,color:C.warning,marginBottom:4}}>{"\u26A0"} Unassigned ({un.length})</div>{un.map(p=><div key={p.Title} style={{fontSize:12,color:C.gray600,padding:"2px 0"}}>{p.PropertyName} ({p.Units}u) — {p.PMName}</div>)}</div>;})()}
-    </div>}</div>
+    </div>
 
     {/* Property Management */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10,cursor:"pointer"}} onClick={()=>toggleSection("properties")}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3D7}\u{FE0F}"} Property Management</div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();if(!openSections.properties)toggleSection("properties");setShowAddProp(!showAddProp);}}>{showAddProp?"Cancel":"+ Add Property"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.properties?"▲":"▼"}</span></div></div>
-      {openSections.properties&&<div>{showAddProp&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3D7}\u{FE0F}"} Property Management</div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowAddProp(!showAddProp);}}>{showAddProp?"Cancel":"+ Add Property"}</button></div></div>
+      {showAddProp&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}><div style={{flex:2,minWidth:150}}><label style={S.label}>Name *</label><input style={S.input} value={npName} onChange={e=>setNpName(e.target.value)} placeholder="Property name"/></div><div style={{flex:1,minWidth:100}}><label style={S.label}>Group *</label><select style={S.select} value={npGroup} onChange={e=>setNpGroup(e.target.value)}><option>Multifamily</option><option>Single Family</option><option>Lease-Up</option></select></div><div style={{minWidth:70}}><label style={S.label}>Units *</label><input style={S.input} type="number" value={npUnits} onChange={e=>setNpUnits(e.target.value)} placeholder="#"/></div></div>
         <div style={{marginTop:10}}><label style={S.label}>Property Manager *</label><select style={S.select} value={npPm} onChange={e=>setNpPm(e.target.value)}><option value="">Select PM...</option>{data.pms.map(pm=><option key={pm.Email} value={pm.Email}>{pm.Name}</option>)}</select></div>
         <button style={{...S.btn(C.success),width:"100%",marginTop:10}} onClick={()=>{if(!npName||!npUnits||!npPm)return;const pm=data.pms.find(p=>p.Email===npPm);onAddProperty({name:npName,group:npGroup,units:parseInt(npUnits)||0,pmEmail:npPm,pmName:pm?.Name||npPm});setNpName("");setNpUnits("");setNpPm("");setShowAddProp(false);}}>{"\u2713"} Add Property</button>
@@ -1707,15 +1705,15 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
             <td style={{...S.td,fontSize:12}}>{va?va.Name:<span style={{color:C.gray400,fontStyle:"italic"}}>Unassigned</span>}</td>
             <td style={S.td}>{isEd?<div style={{display:"flex",gap:3}}><button style={{...S.btn(C.success),...S.btnSm,padding:"3px 8px"}} onClick={()=>{onEditProperty(p.id,{PropertyName:epName,Units:parseInt(epUnits)||p.Units});setEditPropId(null);}}>{"\u2713"}</button><button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm,padding:"3px 8px"}} onClick={()=>setEditPropId(null)}>{"\u2715"}</button></div>:<div style={{display:"flex",gap:3}}><button style={{...S.btnO(C.teal600,C.teal100),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>{setEditPropId(p.id);setEpName(p.PropertyName);setEpUnits(String(p.Units||0));}}>Edit</button><button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:10}} onClick={()=>onDeactivateProperty(p.id,p.PropertyName)}>Deactivate</button></div>}</td></tr>;
         })}</tbody></table></div>
-    </div>}</div>
+    </div>
 
     {/* Category Management */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10,cursor:"pointer"}} onClick={()=>toggleSection("categories")}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
         <div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F3F7}\u{FE0F}"} Task Categories</div>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();if(!openSections.categories)toggleSection("categories");setShowAddCat(!showAddCat);}}>{showAddCat?"Cancel":"+ Add"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.categories?"▲":"▼"}</span></div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.headerBg),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowAddCat(!showAddCat);}}>{showAddCat?"Cancel":"+ Add"}</button></div>
       </div>
-      {openSections.categories&&<div>{showAddCat&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
+      {showAddCat&&<div style={{background:C.teal50,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.teal100}`}}>
         <div style={S.row}>
           <div style={{flex:2,minWidth:150}}><label style={S.label}>Category Name *</label><input style={S.input} value={ncName} onChange={e=>setNcName(e.target.value)} placeholder="e.g., Leasing"/></div>
           <div style={{flex:"0 0 auto"}}><label style={S.label}>Icon — selected: <span style={{fontSize:18}}>{ICON_MAP[ncIcon]||"\u{1F4C1}"}</span></label>
@@ -1750,15 +1748,15 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
           </div>}
         </div>;
       })}
-    </div>}</div>
+    </div>
 
     {/* Guest Management */}
     <div style={{...S.card,borderLeft:`3px solid ${C.purple}`}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10,cursor:"pointer"}} onClick={()=>toggleSection("guests")}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
         <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F441}\u{FE0F}"} Guest Access</div><div style={{fontSize:11,color:C.gray400}}>External clients — read-only, filtered to assigned VAs. Requires User.Invite.All permission in Azure Portal.</div></div>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.purple),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowAddGuest(!showAddGuest);if(!openSections.guests)toggleSection("guests");}}>{showAddGuest?"Cancel":"+ Invite Guest"}</button><span style={{color:C.gray400,fontSize:12}}>{openSections.guests?"▲":"▼"}</span></div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.purple),...S.btnSm}} onClick={e=>{e.stopPropagation();setShowAddGuest(!showAddGuest);}}>{showAddGuest?"Cancel":"+ Invite Guest"}</button></div>
       </div>
-      {openSections.guests&&<div>{showAddGuest&&<div style={{background:C.purpleBg,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.purple}`}}>
+      {showAddGuest&&<div style={{background:C.purpleBg,borderRadius:6,padding:14,marginBottom:14,border:`1px solid ${C.purple}`}}>
         <div style={S.row}>
           <div style={{flex:1,minWidth:140}}><label style={S.label}>Full Name *</label><input style={S.input} value={gName} onChange={e=>setGName(e.target.value)} placeholder="Jane Smith"/></div>
           <div style={{flex:1,minWidth:180}}><label style={S.label}>Email *</label><input style={S.input} value={gEmail} onChange={e=>setGEmail(e.target.value)} placeholder="jane@example.com"/></div>
@@ -1801,11 +1799,10 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
           </div>}
         </div>;
       })}
-    </div>}
     </div>
 
     {/* Cleanup Duplicates */}
-    <div style={{...S.card,borderLeft:`3px solid ${C.info}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("cleanup")}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F9F9}"} Cleanup Duplicates</div><div style={{fontSize:12,color:C.gray400}}>Removes duplicate tasks created today, keeps one of each.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.info),...S.btnSm}} onClick={e=>{e.stopPropagation();onCleanup();}}>Run Cleanup</button><span style={{color:C.gray400,fontSize:12}}>{openSections.cleanup?"▲":"▼"}</span></div></div></div>
+    <div style={{...S.card,borderLeft:`3px solid ${C.info}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F9F9}"} Cleanup Duplicates</div><div style={{fontSize:12,color:C.gray400}}>Removes duplicate tasks created today, keeps one of each.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{...S.btn(C.info),...S.btnSm}} onClick={onCleanup}>Run Cleanup</button></div></div></div>
 
     {/* Backdate In Progress */}
     <BackdatePanel data={data} onBackdate={onBackdate}/>
@@ -1815,14 +1812,14 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
 
     {/* Weekly Report */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10,cursor:"pointer"}} onClick={()=>toggleSection("report")}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
         <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CA}"} Weekly Report</div><div style={{fontSize:12,color:C.gray400}}>Previous week's performance summary</div></div>
         <button style={S.btn(C.headerBg)} onClick={()=>{
           const r=generateReport();if(!r)return;
           const blob=new Blob([r.report],{type:"text/plain"});
           const url=URL.createObjectURL(blob);const a=document.createElement("a");
           a.href=url;a.download=`VA-Weekly-Report-${r.from}-to-${r.to}.txt`;a.click();URL.revokeObjectURL(url);
-        }}>{"\u{1F4E5}"} Download Report</button><span style={{color:C.gray400,fontSize:12}}>{openSections.report?"▲":"▼"}</span>
+        }}>{"\u{1F4E5}"} Download Report</button>
       </div>
       <button style={{...S.btnO(C.teal600,C.teal100),width:"100%"}} onClick={()=>{
         const r=generateReport();if(!r)return;
@@ -1836,7 +1833,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
     {queue.length>0&&<AdminQueuePanel queue={queue} covQ={covQ} data={data} onDeleteTask={onDeleteTask} onCompleteSubTask={onCompleteSubTask}/>}
 
     {/* Close Day */}
-    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("closeday")}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={S.btn(C.warning,C.dark)} onClick={e=>{e.stopPropagation();onCloseDay();}}>Close Day</button><span style={{color:C.gray400,fontSize:12}}>{openSections.closeday?"▲":"▼"}</span></div></div>
+    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={S.btn(C.warning,C.dark)} onClick={onCloseDay}>Close Day</button></div></div>
   </div>);
 }
 
