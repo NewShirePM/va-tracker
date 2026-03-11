@@ -1578,7 +1578,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
         <div style={{marginTop:10}}><label style={S.label}>Task *</label><input style={S.input} value={aDesc} onChange={e=>setADesc(e.target.value)} placeholder="What needs to be done..."/></div>
         <div style={{marginTop:8}}><label style={S.label}>Notes</label><input style={S.input} value={aNotes} onChange={e=>setANotes(e.target.value)} placeholder="Context for the VA (optional)"/></div>
         <button style={{...S.btn(C.headerBg),width:"100%",marginTop:10}} onClick={handleAssign}>{"\u{1F4CC}"} {aProps.length>1?`Add ${aProps.length} Tasks`:"Add to Queue"}</button>
-    </div>
+      </div>}
     </div>
 
     {/* Recurring */}
@@ -1833,7 +1833,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
     {queue.length>0&&<AdminQueuePanel queue={queue} covQ={covQ} data={data} onDeleteTask={onDeleteTask} onCompleteSubTask={onCompleteSubTask}/>}
 
     {/* Close Day */}
-    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={S.btn(C.warning,C.dark)} onClick={onCloseDay}>Close Day</button></div></div>
+    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={S.btn(C.warning,C.dark)} onClick={onCloseDay}>Close Day</button></div></div></div>
   </div>);
 }
 
