@@ -1007,10 +1007,10 @@ function App(){
       <div style={S.tabBar}>{TABS.map((t,i)=><button key={t.k} style={S.tab(tab===i)} onClick={()=>setTab(i)}>{t.n}</button>)}</div>
       {flash&&<div style={{background:C.gold50,borderBottom:`1px solid ${C.gold500}`,padding:"8px 20px",fontSize:13,fontWeight:600,color:C.gold700,textAlign:"center"}}>{flash}</div>}
       <div style={S.content}>
-        {ck==="gdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null} filterVAs={guestVAs} isGuest={true}/>}
+        {ck==="gdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null} filterVAs={guestVAs} isGuest={true}/>}
         {ck==="gactive"&&<ActiveView timers={timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase()))} tick={tick} isMgr={true} readOnly={true} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
-        {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
-        {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
+        {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
+        {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
         {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onBackdate={backdateFinish}/>}
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
@@ -1030,7 +1030,7 @@ function App(){
 // ============================================================
 // DASHBOARD — shared by Admin (all) and Manager (filtered)
 // ============================================================
-function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,filterProps,filterVAs,isGuest}){
+function DashboardView({data,queue,timers,covQ,shift,dfFrom,dfTo,setDfFrom,setDfTo,filterProps,filterVAs,isGuest}){
   if(!data)return null;
   // Filter activities by date range and optionally by properties
   const propIds=filterProps?new Set(filterProps.map(p=>p.Title)):null;
@@ -1090,11 +1090,21 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
             const vQ=queue.filter(t=>t.VAEmail&&t.VAEmail.toLowerCase()===va.Email.toLowerCase());
             const vT=timers.filter(t=>t.VAEmail.toLowerCase()===va.Email.toLowerCase());
             const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase());
+            const td=today();
+            const vaEmail=va.Email.toLowerCase();
+            const vaShiftToday=data.activities.filter(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaEmail&&a.ActivityDate?.slice(0,10)===td);
+            const openShift=vaShiftToday.find(s=>s.StartTime&&!s.EndTime);
+            const isClockedIn=!!openShift||(shift&&myEmail===vaEmail&&!!shift.ClockIn&&!shift.ClockOut);
+            const isOnBreak=isClockedIn&&((openShift&&(()=>{try{const b=JSON.parse(openShift.BreaksJSON||"[]");return b.length>0&&!b[b.length-1].e;}catch{return false;}})())||(shift&&myEmail===vaEmail&&shift._ob));
             return(
               <div key={va.Email} style={{flex:"1 0 200px",minWidth:200,background:isOut?C.errorBg:C.pageBg,borderRadius:6,padding:10,border:`1px solid ${isOut?"rgba(196,75,59,0.2)":C.gray100}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,paddingBottom:6,borderBottom:`2px solid ${C.teal100}`}}>
                   <div><div style={{fontSize:13,fontWeight:700,color:isOut?C.error:C.teal700}}>{va.Name}{isOut?" \u{1F6D1}":""}</div><div style={{fontSize:10,color:C.gray400}}>{port.length} props</div></div>
-                  {isOut?<Badge type="error">OUT</Badge>:vT.length>0?<Badge type="success">Active</Badge>:<span style={{fontSize:10,color:C.gray300}}>Offline</span>}
+                  {isOut?<Badge type="error">OUT</Badge>:
+                    vT.length>0?<Badge type="success">⏱ Timing</Badge>:
+                    isOnBreak?<Badge type="warning">☕ Break</Badge>:
+                    isClockedIn?<Badge type="info">✓ Clocked In</Badge>:
+                    <span style={{fontSize:10,color:C.gray300}}>Not Clocked In</span>}
                 </div>
                 {vT.map(t=><div key={t._localId} style={{background:C.white,border:`1px solid ${C.success}`,borderLeft:`3px solid ${C.success}`,borderRadius:4,padding:8,marginBottom:5}}><div style={{fontSize:10,fontWeight:600,color:C.success,textTransform:"uppercase"}}>{"\u25CF"} In Progress</div><div style={{fontSize:12,fontWeight:500,color:C.teal700}}>{t.Title}</div><div style={{fontSize:10,color:C.gray400}}>{t.PropertyName}</div></div>)}
                 {(()=>{
@@ -1129,15 +1139,22 @@ function DashboardView({data,queue,timers,covQ,dfFrom,dfTo,setDfFrom,setDfTo,fil
         <div style={S.cardTitle}>VA Performance</div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
-            <thead><tr>{["VA","Portfolio","Done","Rate","Shift","Tasks","Util","Blocked","Incomplete"].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <thead><tr>{["VA","Status","Portfolio","Done","Rate","Shift","Tasks","Util","Blocked","Incomplete"].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
             <tbody>
               {filteredVAs.map(va=>{
                 const vT=tasks.filter(a=>a.VAEmail===va.Email);const vD=vT.filter(a=>a.Status==="Completed");const vI=vT.filter(a=>a.Status==="Incomplete");const vB=vT.filter(a=>a.Status==="Blocked");
                 const vS=shifts.filter(a=>a.VAEmail===va.Email);const vSm=vS.reduce((s,a)=>s+(a.WorkMinutes||0),0);const vTm=vD.reduce((s,a)=>s+(a.DurationMin||0),0);
                 const vR=vT.length?Math.round(vD.length/vT.length*100):0;const vU=vSm>0?Math.round(vTm/vSm*100):0;
                 const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase());
+                const td2=today();const vaE2=va.Email.toLowerCase();
+                const vs2=data.activities.filter(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaE2&&a.ActivityDate?.slice(0,10)===td2);
+                const os2=vs2.find(s=>s.StartTime&&!s.EndTime);
+                const ci2=!!os2||(shift&&myEmail===vaE2&&!!shift.ClockIn);
+                const ob2=ci2&&((os2&&(()=>{try{const b=JSON.parse(os2.BreaksJSON||"[]");return b.length>0&&!b[b.length-1].e;}catch{return false;}})())||(shift&&myEmail===vaE2&&shift._ob));
+                const tTiming=timers.some(t=>t.VAEmail.toLowerCase()===vaE2);
                 return(<tr key={va.Email} style={{opacity:getVAStatus(va)==="Out"?0.6:1}}>
                   <td style={{...S.td,fontWeight:600,color:getVAStatus(va)==="Out"?C.error:C.teal700}}>{va.Name}</td>
+                  <td style={S.td}>{getVAStatus(va)==="Out"?<Badge type="error">OUT</Badge>:tTiming?<Badge type="success">⏱ Timing</Badge>:ob2?<Badge type="warning">☕ Break</Badge>:ci2?<Badge type="info">✓ In</Badge>:<span style={{fontSize:11,color:C.gray400}}>—</span>}</td>
                   <td style={{...S.td,fontSize:12}}>{port.length} props</td>
                   <td style={S.td}>{vD.length}/{vT.length}</td>
                   <td style={S.td}><Badge type={vR>=85?"success":vR>=60?"warning":"error"}>{vR}%</Badge></td>
