@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VA Productivity Tracker — NewShire PM</title>
-<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@500;700&display=swap" rel="stylesheet">
+<style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}`}</style>
+      <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@500;700&display=swap" rel="stylesheet">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Source Sans 3', 'Segoe UI', -apple-system, sans-serif; background: #F7F8F7; }
@@ -275,7 +276,7 @@ function App(){
   const[role,setRole]=useState(null);
   const[myEmail,setMyEmail]=useState(null);
   const[myEmp,setMyEmp]=useState(null);
-  const[flash,setFlash]=useState("");
+  const[flash,setFlash]=useState("");const[lastSync,setLastSync]=useState(null);const[syncing,setSyncing]=useState(false);
   const[timers,setTimers]=useState([]);
   const[shift,setShift]=useState(()=>{
     try{
@@ -291,6 +292,31 @@ function App(){
   const[dfTo,setDfTo]=useState(today());
 
   useEffect(()=>{const id=setInterval(()=>setTick(t=>t+1),1000);return()=>clearInterval(id);},[]);
+
+  // ── Auto-refresh polling ──
+  const pollRef=useRef(null);
+  useEffect(()=>{
+    if(!token||!acct||!data)return;
+    function getInterval(){
+      // 15s when timers are running, 30s otherwise
+      return timers.length>0?15000:30000;
+    }
+    async function poll(){
+      if(document.hidden)return; // skip when tab not visible
+      try{
+        setSyncing(true);
+        const tk=await refresh();
+        if(!tk)return;
+        const d=await loadAll(tk);
+        setData(d);
+        buildQueue(d,myEmail);
+        setLastSync(Date.now());
+      }catch(e){console.warn("[VT] Poll error:",e);}
+      finally{setSyncing(false);}
+    }
+    pollRef.current=setInterval(poll,getInterval());
+    return()=>clearInterval(pollRef.current);
+  },[token,acct,data?.activities?.length,timers.length]);
   // Restore persisted shift when email becomes known
   useEffect(()=>{
     if(!myEmail)return;
@@ -959,6 +985,17 @@ function App(){
       <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@500;700&display=swap" rel="stylesheet"/>
       <div style={S.header}>
         <div><div style={S.headerTitle}>{CONFIG.appName}</div><div style={S.headerSub}>NewShire Property Management</div></div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{textAlign:"right"}}>
+            {lastSync&&<div style={{fontSize:10,color:C.gray400,display:"flex",alignItems:"center",gap:4,justifyContent:"flex-end"}}>
+              <span style={{display:"inline-block",width:6,height:6,borderRadius:"50%",background:syncing?C.warning:C.success,animation:syncing?"pulse 1s infinite":"none"}}/>
+              {syncing?"Syncing…":`Updated ${Math.round((Date.now()-lastSync)/1000)}s ago`}
+            </div>}
+          </div>
+          <button title="Refresh now" style={{background:"none",border:`1px solid ${C.teal600}`,borderRadius:4,color:C.teal100,fontSize:13,cursor:"pointer",padding:"4px 8px",display:"flex",alignItems:"center",gap:4}} onClick={async()=>{setSyncing(true);try{const tk=await refresh();if(tk){const d=await loadAll(tk);setData(d);buildQueue(d,myEmail);setLastSync(Date.now());}}finally{setSyncing(false);}}}>
+            <span style={{display:"inline-block",transition:"transform 0.4s",transform:syncing?"rotate(360deg)":"rotate(0deg)"}}>↻</span>
+          </button>
+        </div>
         <div style={S.headerUser}>
           <div style={{fontWeight:600}}>{isGuest?myGuest?.GuestName:acct.name||myEmail}</div>
           <div style={{fontSize:11,color:isGuest?C.purple:C.gold500,textTransform:"uppercase"}}>{isGuest?`Guest${myGuest?.Company?` · ${myGuest.Company}`:""}${guestVAs?` · ${guestVAs.length} VAs`:""}`:role+( role==="manager"?` · ${mgrProps.length} properties`:"")}</div>
