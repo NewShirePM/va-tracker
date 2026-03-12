@@ -1466,8 +1466,8 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails}){
   const isGuest=role==="guest";
   const propFilter=role==="manager"?new Set(mgrProps.map(p=>p.Title)):null;
   const gSet=guestVAEmails?.length>0?new Set(guestVAEmails):null;
-  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status!=="Queued"&&a.Status!=="In Progress"&&a.Notes!=="Removed by admin"&&(isGuest?(gSet?gSet.has(a.VAEmail?.toLowerCase()):false):(isMgr?(propFilter?propFilter.has(a.PropertyId):true):a.VAEmail?.toLowerCase()===myEmail))).slice(0,100);
-  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&(role==="admin"||a.VAEmail?.toLowerCase()===myEmail)).slice(0,30);
+  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status!=="Queued"&&a.Status!=="In Progress"&&a.Notes!=="Removed by admin"&&(isGuest?(gSet?gSet.has(a.VAEmail?.toLowerCase()):false):(isMgr?(propFilter?propFilter.has(a.PropertyId):true):a.VAEmail?.toLowerCase()===myEmail))).sort((a,b)=>new Date(actDate(b)||0)-new Date(actDate(a)||0)).slice(0,100);
+  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&(role==="admin"||a.VAEmail?.toLowerCase()===myEmail)).sort((a,b)=>new Date(b.ActivityDate||0)-new Date(a.ActivityDate||0)).slice(0,30);
 
   return(<div>
     {isGuest&&<div style={{background:C.purpleBg,border:`1px solid ${C.purple}`,borderRadius:6,padding:"8px 14px",marginBottom:12,fontSize:12,color:C.purple}}>👁️ Read-only — task history for your assigned VAs</div>}
