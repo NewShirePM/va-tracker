@@ -747,6 +747,45 @@ function App(){
     fl(`Updated ${count} tasks to ${completedDate}`);
   }
 
+  // ── Retroactive Close Past Days ──
+  async function closePastDays(){
+    const tk=await gT();
+    const td=today();
+    // Find all Queued or In Progress tasks from before today (daily recurring)
+    const stale=data.activities.filter(a=>
+      a.ActivityType==="Task"&&
+      (a.Status==="Queued"||a.Status==="In Progress")&&
+      a.ActivityDate&&a.ActivityDate.slice(0,10)<td
+    );
+    if(!stale.length){fl("No stale tasks found");return stale;}
+    return stale;
+  }
+
+  async function confirmClosePastDays(tasks,notes){
+    const tk=await gT();
+    let count=0;
+    for(const t of tasks){
+      try{
+        await gPatch(tk,iUrl("VA_Activity",t.id),{Status:"Incomplete",Notes:notes||"Closed retroactively"});
+        count++;
+      }catch(e){console.warn("[VT] Retroclose failed:",e);}
+    }
+    fl(`${count} past tasks marked Incomplete`);
+    await reload();
+  }
+
+  // ── Blocked Task Review ──
+  async function resolveBlocked(taskId,status,notes){
+    const tk=await gT();
+    try{
+      const fields={Status:status,Notes:notes||""};
+      if(status==="Completed"){fields.EndTime=new Date().toISOString();}
+      await gPatch(tk,iUrl("VA_Activity",taskId),fields);
+      fl(`Task marked ${status}`);
+      await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+
   // ── Weekly Report ──
   function generateWeeklyReport(){
     if(!data)return null;
@@ -940,7 +979,12 @@ function App(){
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} guestVAEmails={guestVAEmails}/>}
         {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks} onClosePastDays={closePastDays} onConfirmClosePastDays={confirmClosePastDays} onResolveBlocked={resolveBlocked}/>}
+      <div style={{background:"#0f2229",borderTop:"2px solid #CDA04B",padding:"10px 20px",textAlign:"center",marginTop:20}}>
+        <div style={{fontSize:11,color:"#8aabb5",letterSpacing:"0.04em"}}>
+          2025 · This application is the intellectual property of NewShire Property Management. Reproduction or use without written permission is prohibited.
+        </div>
+      </div>
       </div>
     </div>
   );
@@ -1481,8 +1525,10 @@ function BackdatePanel({data,onBackdate}){
 // ============================================================
 // ADMIN VIEW
 // ============================================================
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate}){
-  const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate,onClosePastDays,onConfirmClosePastDays,onResolveBlocked}){
+  const[showAssign,setShowAssign]=useState(false);
+  const[staleTasks,setStaleTasks]=useState(null);const[staleNotes,setStaleNotes]=useState("Closed retroactively");
+  const[blockedFilter,setBlockedFilter]=useState("");const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
   const[portVa,setPortVa]=useState("");const[portProp,setPortProp]=useState("");
@@ -1492,7 +1538,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
   // Category management
   const[showAddCat,setShowAddCat]=useState(false);const[ncName,setNcName]=useState("");const[ncIcon,setNcIcon]=useState("folder");
   const[editCatId,setEditCatId]=useState(null);const[ecName,setEcName]=useState("");const[ecIcon,setEcIcon]=useState("folder");const[showEcIcons,setShowEcIcons]=useState(false);
-  const[openSections,setOpenSections]=useState({absence:true,assign:false,recurring:false,portfolio:false,properties:false,categories:false,guests:false,report:false,closeday:true,cleanup:false,queue:false});
+  const[openSections,setOpenSections]=useState({absence:true,assign:false,recurring:false,portfolio:false,properties:false,categories:false,guests:false,report:false,closeday:true,cleanup:false,queue:false,pastclose:false,blocked:true});
   function toggleSection(k){setOpenSections(p=>({...p,[k]:!p[k]}));}
 
   if(!data)return null;
@@ -1834,7 +1880,68 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
     {/* Queued Task Management */}
     {queue.length>0&&<AdminQueuePanel queue={queue} covQ={covQ} data={data} onDeleteTask={onDeleteTask} onCompleteSubTask={onCompleteSubTask}/>}
 
-    {/* Close Day */}
+    {/* Retroactive Past Day Close */}
+    <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("pastclose")}>
+        <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>📅 Retroactive Day Close</div><div style={{fontSize:12,color:C.gray400}}>Mark unfinished tasks from previous days as Incomplete</div></div>
+        <span style={{color:C.gray400}}>{openSections.pastclose?"▲":"▼"}</span>
+      </div>
+      {openSections.pastclose&&<div style={{marginTop:14}}>
+        {!staleTasks?(<div>
+          <div style={{fontSize:13,color:C.gray600,marginBottom:12}}>Scans for any Queued or In Progress tasks dated before today and lets you bulk-mark them Incomplete.</div>
+          <button style={{...S.btn(C.warning,C.dark),width:"100%"}} onClick={async()=>{const tasks=await onClosePastDays();setStaleTasks(tasks||[]);}}>🔍 Find Stale Tasks</button>
+        </div>):staleTasks.length===0?(<div>
+          <div style={{padding:"20px 0",textAlign:"center",color:C.success,fontSize:14,fontWeight:600}}>✓ No stale tasks found — all clear!</div>
+          <button style={{...S.btnO(C.gray400,C.gray200),width:"100%",marginTop:8}} onClick={()=>setStaleTasks(null)}>Reset</button>
+        </div>):(<div>
+          <div style={{fontSize:13,fontWeight:600,color:C.warning,marginBottom:8}}>{staleTasks.length} stale task{staleTasks.length!==1?"s":""} found:</div>
+          <div style={{border:`1px solid ${C.gray200}`,borderRadius:4,maxHeight:200,overflowY:"auto",marginBottom:12}}>
+            {staleTasks.map((t,i)=><div key={i} style={{display:"flex",gap:8,padding:"7px 10px",borderBottom:`1px solid ${C.gray100}`,fontSize:12}}>
+              <span style={{color:C.gray400,whiteSpace:"nowrap"}}>{t.ActivityDate?.slice(0,10)}</span>
+              <span style={{fontWeight:600,color:C.teal700,flex:1}}>{t.VAName}</span>
+              <span style={{flex:2,color:C.gray600}}>{t.Title}</span>
+              <span style={{color:C.gray400}}>{t.PropertyName||"General"}</span>
+            </div>)}
+          </div>
+          <div style={{marginBottom:10}}><label style={S.label}>Notes (applied to all)</label><input style={S.input} value={staleNotes} onChange={e=>setStaleNotes(e.target.value)}/></div>
+          <div style={{display:"flex",gap:8}}>
+            <button style={{...S.btn(C.error),flex:1}} onClick={async()=>{await onConfirmClosePastDays(staleTasks,staleNotes);setStaleTasks(null);setStaleNotes("Closed retroactively");}}>✓ Mark All Incomplete ({staleTasks.length})</button>
+            <button style={{...S.btnO(C.gray400,C.gray200),flex:1}} onClick={()=>setStaleTasks(null)}>Cancel</button>
+          </div>
+        </div>)}
+      </div>}
+    </div>
+
+    {/* Blocked Task Review */}
+    {(()=>{const blocked=data.activities.filter(a=>a.ActivityType==="Task"&&a.Status==="Blocked");
+      const filtered=blockedFilter?blocked.filter(t=>t.VAEmail?.toLowerCase()===blockedFilter):blocked;
+      return blocked.length>0&&(
+      <div style={{...S.card,borderLeft:`3px solid ${C.error}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("blocked")}>
+          <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>⚠️ Blocked Task Review <span style={{fontSize:13,fontWeight:400,color:C.error}}>({blocked.length})</span></div><div style={{fontSize:12,color:C.gray400}}>Resolve blocked tasks — mark complete, incomplete, or remove</div></div>
+          <span style={{color:C.gray400}}>{openSections.blocked?"▲":"▼"}</span>
+        </div>
+        {openSections.blocked&&<div style={{marginTop:12}}>
+          {data.vas.length>1&&<div style={{marginBottom:10}}><select style={{...S.select,width:"auto",minWidth:160}} value={blockedFilter} onChange={e=>setBlockedFilter(e.target.value)}><option value="">All VAs</option>{data.vas.map(v=><option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}</option>)}</select></div>}
+          {filtered.map((t,i)=><div key={i} style={{background:C.errorBg,border:`1px solid rgba(196,75,59,0.15)`,borderRadius:4,padding:10,marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.teal700}}>{t.Title}</div>
+                <div style={{fontSize:11,color:C.gray400,marginTop:2}}>{t.VAName} · {t.PropertyName||"General"} · {t.ActivityDate?.slice(0,10)||"—"}</div>
+                {t.Notes&&<div style={{fontSize:12,color:C.error,marginTop:3}}>🔴 {t.Notes}</div>}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <button style={{...S.btn(C.success),...S.btnSm}} onClick={()=>{const n=prompt("Completion notes (optional):",t.Notes||"");if(n!==null)onResolveBlocked(t.id,"Completed",n);}}>✓ Complete</button>
+              <button style={{...S.btnO(C.warning,C.warning),...S.btnSm}} onClick={()=>{const n=prompt("Notes:",t.Notes||"");if(n!==null)onResolveBlocked(t.id,"Incomplete",n);}}>✗ Incomplete</button>
+              <button style={{...S.btnO(C.error,C.error),...S.btnSm}} onClick={()=>{if(window.confirm(`Remove "${t.Title}"? This cannot be undone.`))onResolveBlocked(t.id,"Incomplete","Removed by admin");}}>🗑 Remove</button>
+            </div>
+          </div>)}
+        </div>}
+      </div>
+    );})()}
+
+        {/* Close Day */}
     <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F504}"} Close Day</div><div style={{fontSize:12,color:C.gray400}}>Marks unfinished daily tasks Incomplete, clears coverage.</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={S.btn(C.warning,C.dark)} onClick={onCloseDay}>Close Day</button></div></div></div>
   </div>);
 }
