@@ -370,8 +370,15 @@ function App(){
     persistedQueued.forEach(a=>{
       const t={...a,_localId:a.id,_spId:a.id};
       if(a.Status==="In Progress"){
-        // Restore as active timer — use StartTime from SP, default to now if missing
-        const timerTask={...t,StartTime:a.StartTime||new Date().toISOString(),_pMs:0,_pS:null};
+        // Restore as active timer — check sessionStorage for paused state
+        const pausedStore=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");
+        const pausedData=pausedStore[a.id]||pausedStore[t._localId];
+        const timerTask={
+          ...t,
+          StartTime:a.StartTime||new Date().toISOString(),
+          _pMs:pausedData?pausedData.pMs||0:0,
+          _pS:pausedData?pausedData.pausedAt:null  // restore as paused if it was paused
+        };
         tm.push(timerTask);
       } else if(a.Source==="Coverage"||a.CoverageForEmail){cv.push(t);}
       else{q.push(t);}
@@ -552,8 +559,25 @@ function App(){
     }
     setTimers(p=>[...p,timer]);fl(task.GroupId?`Group timer started — ${(timer._groupSize||1)} properties`:"Timer started!");
   }
-  function pauseTimer(id){setTimers(p=>p.map(t=>t._localId===id?{...t,_pS:Date.now()}:t));}
-  function resumeTimer(id){setTimers(p=>p.map(t=>{if(t._localId!==id||!t._pS)return t;return{...t,_pMs:(t._pMs||0)+(Date.now()-t._pS),_pS:null};}));}
+  function pauseTimer(id){
+    setTimers(p=>p.map(t=>{
+      if(t._localId!==id)return t;
+      const updated={...t,_pS:Date.now()};
+      try{
+        const paused=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");
+        paused[id]={pausedAt:Date.now(),pMs:t._pMs||0};
+        sessionStorage.setItem("va_paused_timers",JSON.stringify(paused));
+      }catch(e){}
+      return updated;
+    }));
+  }
+  function resumeTimer(id){
+    setTimers(p=>p.map(t=>{
+      if(t._localId!==id||!t._pS)return t;
+      try{const paused=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");delete paused[id];sessionStorage.setItem("va_paused_timers",JSON.stringify(paused));}catch(e){}
+      return{...t,_pMs:(t._pMs||0)+(Date.now()-t._pS),_pS:null};
+    }));
+  }
   async function finishTimer(id,status,notes){
     const t=timers.find(x=>x._localId===id);if(!t)return;
     const now=Date.now();let pMs=t._pMs||0;if(t._pS)pMs+=(now-t._pS);
@@ -565,6 +589,7 @@ function App(){
       if(t._spId){await gPatch(tk,iUrl("VA_Activity",t._spId),fields);}
       else{await saveTask({...t,...fields});}
       setTimers(p=>p.filter(x=>x._localId!==id));
+      try{const paused=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");delete paused[id];sessionStorage.setItem("va_paused_timers",JSON.stringify(paused));}catch(e){}
       // If this was a group timer, also finish all remaining queued sub-tasks
       if(t.GroupId){await finishGroupTimer(t.GroupId,status,notes,rawMs,pMs);}
       else{fl(status==="Completed"?"Task completed!":"Task: "+status);await reload();}
@@ -593,23 +618,54 @@ function App(){
   }
 
   // ── Shift clock ──
-  function clockIn(){
+  async function clockIn(){
     if(shift){fl("Already clocked in!");return;}
-    const s={ClockIn:new Date().toISOString(),Breaks:[],_ob:false,_bs:null};
+    const now=new Date().toISOString();
+    const s={ClockIn:now,Breaks:[],_ob:false,_bs:null,_spId:null};
     setShift(s);
     try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}
     fl("Clocked in!");
+    // Write open shift record to SharePoint immediately so dashboard sees it
+    try{
+      const tk=await gT();
+      const res=await gPost(tk,lUrl("VA_Activity"),{
+        Title:`${myEmp?.Name||myEmail}-${today()}-Open`,
+        ActivityType:"Shift",VAEmail:myEmail,VAName:myEmp?.Name||myEmail,
+        ActivityDate:now,StartTime:now,EndTime:null,
+        BreakMinutes:0,WorkMinutes:0,BreaksJSON:"[]"
+      });
+      const spId=res.id;
+      setShift(p=>p?{...p,_spId:spId}:p);
+      try{const saved=JSON.parse(sessionStorage.getItem("va_shift_"+myEmail)||"{}");sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify({...saved,_spId:spId}));}catch(e){}
+      console.log("[VT] Shift record created:",spId);
+    }catch(e){console.warn("[VT] Shift SP write failed:",e);}
   }
-  function startBreak(){setShift(p=>{if(!p)return p;const s={...p,_ob:true,_bs:new Date().toISOString()};try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});}
-  function endBreak(){setShift(p=>{if(!p||!p._bs)return p;const s={...p,_ob:false,Breaks:[...p.Breaks,{s:p._bs,e:new Date().toISOString()}],_bs:null};try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});}
+  async function startBreak(){
+    const now=new Date().toISOString();
+    setShift(p=>{if(!p)return p;const s={...p,_ob:true,_bs:now};try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});
+    if(shift?._spId){try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",shift._spId),{Title:`${myEmp?.Name||myEmail}-${today()}-Break`});}catch(e){console.warn("[VT] Break patch:",e);}}
+  }
+  async function endBreak(){
+    const now=new Date().toISOString();
+    setShift(p=>{if(!p||!p._bs)return p;const s={...p,_ob:false,Breaks:[...p.Breaks,{s:p._bs,e:now}],_bs:null};try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});
+    if(shift?._spId){try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",shift._spId),{Title:`${myEmp?.Name||myEmail}-${today()}-Open`});}catch(e){console.warn("[VT] EndBreak patch:",e);}}
+  }
   async function clockOut(){
     if(!shift)return;const now=new Date();const bks=[...shift.Breaks];
     if(shift._ob&&shift._bs)bks.push({s:shift._bs,e:now.toISOString()});
     const bMs=bks.reduce((s,b)=>s+(new Date(b.e)-new Date(b.s)),0);
     const bMin=Math.round(bMs/6e4);const wMin=Math.round((now-new Date(shift.ClockIn)-bMs)/6e4);
-    // Warn if 10+ hours
     if(wMin>600&&!window.confirm(`You've been clocked in for ${fM(wMin)}. Clock out?`))return;
-    try{await saveShift({VAEmail:myEmail,VAName:myEmp?.Name||myEmail,ClockIn:shift.ClockIn,ClockOut:now.toISOString(),BreakMinutes:bMin,WorkMinutes:wMin,Breaks:bks});
+    try{
+      const tk=await gT();
+      const fields={Title:`${myEmp?.Name||myEmail}-${today()}`,EndTime:now.toISOString(),BreakMinutes:bMin,WorkMinutes:wMin,BreaksJSON:JSON.stringify(bks)};
+      if(shift._spId){
+        // PATCH the open shift record we already created on clock-in
+        await gPatch(tk,iUrl("VA_Activity",shift._spId),fields);
+      }else{
+        // Fallback: no SP record exists yet (old session), create one
+        await gPost(tk,lUrl("VA_Activity"),{...fields,ActivityType:"Shift",VAEmail:myEmail,VAName:myEmp?.Name||myEmail,ActivityDate:shift.ClockIn,StartTime:shift.ClockIn});
+      }
       setShift(null);try{sessionStorage.removeItem("va_shift_"+myEmail);}catch(e){}fl("Clocked out!");await reload();
     }catch(e){fl("Error: "+e.message);}
   }
@@ -774,6 +830,25 @@ function App(){
   }
 
   // ── Retroactive Close Past Days ──
+  // ── Admin: manually record shift start for a VA ──
+  async function adminClockIn(vaEmail,vaName,startTime){
+    try{
+      const tk=await gT();
+      const td=today();
+      const existing=data.activities.find(a=>
+        a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaEmail.toLowerCase()&&
+        a.ActivityDate?.slice(0,10)===td&&!a.EndTime
+      );
+      if(existing){fl(`${vaName} already has an open shift today`);return;}
+      await gPost(tk,lUrl("VA_Activity"),{
+        Title:`${vaName}-${td}-Open`,ActivityType:"Shift",
+        VAEmail:vaEmail,VAName:vaName,ActivityDate:startTime,
+        StartTime:startTime,EndTime:null,BreakMinutes:0,WorkMinutes:0,BreaksJSON:"[]"
+      });
+      fl(`Shift recorded for ${vaName}`);await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+
   async function closePastDays(){
     const tk=await gT();
     const td=today();
@@ -1016,7 +1091,7 @@ function App(){
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} guestVAEmails={guestVAEmails}/>}
         {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks} onClosePastDays={closePastDays} onConfirmClosePastDays={confirmClosePastDays} onResolveBlocked={resolveBlocked}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks} onAdminClockIn={adminClockIn} onClosePastDays={closePastDays} onConfirmClosePastDays={confirmClosePastDays} onResolveBlocked={resolveBlocked}/>}
       <div style={{background:"#0f2229",borderTop:"2px solid #CDA04B",padding:"10px 20px",textAlign:"center",marginTop:20}}>
         <div style={{fontSize:11,color:"#8aabb5",letterSpacing:"0.04em"}}>
           2025 · This application is the intellectual property of NewShire Property Management. Reproduction or use without written permission is prohibited.
@@ -1094,8 +1169,8 @@ function DashboardView({data,queue,timers,covQ,shift,dfFrom,dfTo,setDfFrom,setDf
             const vaEmail=va.Email.toLowerCase();
             const vaShiftToday=data.activities.filter(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaEmail&&a.ActivityDate?.slice(0,10)===td);
             const openShift=vaShiftToday.find(s=>s.StartTime&&!s.EndTime);
-            const isClockedIn=!!openShift||(shift&&myEmail===vaEmail&&!!shift.ClockIn&&!shift.ClockOut);
-            const isOnBreak=isClockedIn&&((openShift&&(()=>{try{const b=JSON.parse(openShift.BreaksJSON||"[]");return b.length>0&&!b[b.length-1].e;}catch{return false;}})())||(shift&&myEmail===vaEmail&&shift._ob));
+            const isClockedIn=!!openShift||(shift&&myEmail===vaEmail&&!!shift.ClockIn);
+            const isOnBreak=isClockedIn&&((openShift&&openShift.Title?.endsWith("-Break"))||(shift&&myEmail===vaEmail&&shift._ob));
             return(
               <div key={va.Email} style={{flex:"1 0 200px",minWidth:200,background:isOut?C.errorBg:C.pageBg,borderRadius:6,padding:10,border:`1px solid ${isOut?"rgba(196,75,59,0.2)":C.gray100}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,paddingBottom:6,borderBottom:`2px solid ${C.teal100}`}}>
@@ -1150,7 +1225,7 @@ function DashboardView({data,queue,timers,covQ,shift,dfFrom,dfTo,setDfFrom,setDf
                 const vs2=data.activities.filter(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaE2&&a.ActivityDate?.slice(0,10)===td2);
                 const os2=vs2.find(s=>s.StartTime&&!s.EndTime);
                 const ci2=!!os2||(shift&&myEmail===vaE2&&!!shift.ClockIn);
-                const ob2=ci2&&((os2&&(()=>{try{const b=JSON.parse(os2.BreaksJSON||"[]");return b.length>0&&!b[b.length-1].e;}catch{return false;}})())||(shift&&myEmail===vaE2&&shift._ob));
+                const ob2=ci2&&((os2&&os2.Title?.endsWith("-Break"))||(shift&&myEmail===vaE2&&shift._ob));
                 const tTiming=timers.some(t=>t.VAEmail.toLowerCase()===vaE2);
                 return(<tr key={va.Email} style={{opacity:getVAStatus(va)==="Out"?0.6:1}}>
                   <td style={{...S.td,fontWeight:600,color:getVAStatus(va)==="Out"?C.error:C.teal700}}>{va.Name}</td>
@@ -1579,9 +1654,11 @@ function BackdatePanel({data,onBackdate}){
 // ============================================================
 // ADMIN VIEW
 // ============================================================
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate,onClosePastDays,onConfirmClosePastDays,onResolveBlocked}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate,onAdminClockIn,onClosePastDays,onConfirmClosePastDays,onResolveBlocked}){
   const[showAssign,setShowAssign]=useState(false);
-  const[staleTasks,setStaleTasks]=useState(null);const[staleNotes,setStaleNotes]=useState("Closed retroactively");
+  const[staleTasks,setStaleTasks]=useState(null);
+  const[adminCiVa,setAdminCiVa]=useState("");
+  const[adminCiTime,setAdminCiTime]=useState(()=>{const d=new Date();d.setSeconds(0,0);return d.toISOString().slice(0,16);});const[staleNotes,setStaleNotes]=useState("Closed retroactively");
   const[blockedFilter,setBlockedFilter]=useState("");const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");
   const[editIdx,setEditIdx]=useState(null);const[editDesc,setEditDesc]=useState("");
@@ -1661,6 +1738,31 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
         <div><div style={{fontSize:14,fontWeight:600,color:getVAStatus(va)==="Out"?C.error:C.teal700}}>{va.Name}</div><div style={{fontSize:11,color:C.gray400}}>{data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase()).length} properties</div></div>
         <div style={{display:"flex",alignItems:"center",gap:6}}><Badge type={getVAStatus(va)==="Out"?"error":"success"}>{getVAStatus(va)}</Badge><button style={{...(getVAStatus(va)==="Out"?S.btn(C.success):S.btn(C.error)),...S.btnSm}} onClick={()=>onToggleAbsence(va)}>{getVAStatus(va)==="Out"?"Mark In":"Mark Out"}</button><button style={{...S.btnO(C.info,C.info),...S.btnSm,fontSize:10}} onClick={()=>onRecoverTasks(va)} title="Recover any coverage tasks back to this VA">↩ Recover</button></div></div>)}
       {covQ.length>0&&<div style={{marginTop:10,padding:8,background:C.warningBg,borderRadius:4,fontSize:12,color:C.warning}}>{"\u26A0"} {covQ.length} unclaimed coverage tasks</div>}
+      <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${C.gray100}`}}>
+        <div style={{fontSize:13,fontWeight:600,color:C.teal700,marginBottom:8}}>📌 Record Clock-In for VA</div>
+        <div style={{fontSize:12,color:C.gray400,marginBottom:10}}>Use this to record a shift start for any VA who is already clocked in but wasn't captured by the system.</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div style={{flex:1,minWidth:140}}><label style={S.label}>VA</label>
+            <select style={S.select} value={adminCiVa} onChange={e=>setAdminCiVa(e.target.value)}>
+              <option value="">Select VA...</option>
+              {data.vas.map(v=>{
+                const td=today();
+                const hasOpen=data.activities.some(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===v.Email.toLowerCase()&&a.ActivityDate?.slice(0,10)===td&&!a.EndTime);
+                return<option key={v.Email} value={v.Email}>{v.Name}{hasOpen?" ✓ already clocked in":""}</option>;
+              })}
+            </select>
+          </div>
+          <div style={{minWidth:160}}><label style={S.label}>Clock-In Time</label>
+            <input type="datetime-local" style={S.input} value={adminCiTime} onChange={e=>setAdminCiTime(e.target.value)}/>
+          </div>
+          <button style={{...S.btn(C.info),minWidth:120,opacity:(!adminCiVa||!adminCiTime)?0.5:1}} onClick={()=>{
+            if(!adminCiVa||!adminCiTime)return;
+            const va=data.vas.find(v=>v.Email===adminCiVa);
+            onAdminClockIn(adminCiVa,va?.Name||adminCiVa,new Date(adminCiTime).toISOString());
+            setAdminCiVa("");
+          }}>✓ Record</button>
+        </div>
+      </div>
     </div>}</div>
 
     {/* Assign */}
