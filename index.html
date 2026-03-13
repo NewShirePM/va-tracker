@@ -830,12 +830,34 @@ function App(){
   }
 
   // ── Retroactive Close Past Days ──
-  // ── Update task duration ──
-  async function updateDuration(taskId,durationMin){
+  // ── Add backdated shift ──
+  async function addBackdatedShift(vaEmail,vaName,clockIn,clockOut,breakMin){
     try{
       const tk=await gT();
-      await gPatch(tk,iUrl("VA_Activity",taskId),{DurationMin:durationMin});
-      fl("Duration updated!");
+      const ci=new Date(clockIn);const co=new Date(clockOut);
+      if(co<=ci){fl("Clock-out must be after clock-in");return;}
+      const totalMs=co-ci;
+      const bMs=breakMin*60000;
+      const workMin=Math.max(0,Math.round((totalMs-bMs)/60000));
+      await gPost(tk,lUrl("VA_Activity"),{
+        Title:`${vaName}-${clockIn.slice(0,10)}`,
+        ActivityType:"Shift",VAEmail:vaEmail,VAName:vaName,
+        ActivityDate:ci.toISOString(),StartTime:ci.toISOString(),
+        EndTime:co.toISOString(),BreakMinutes:breakMin,
+        WorkMinutes:workMin,BreaksJSON:"[]"
+      });
+      fl(`Shift added for ${vaName} on ${clockIn.slice(0,10)} (${fM(workMin)} worked)`);
+      await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+
+  // ── Update task duration / shift fields ──
+  async function updateDuration(taskId,durationMin,extraFields){
+    try{
+      const tk=await gT();
+      const fields=extraFields?{...extraFields}:{DurationMin:durationMin};
+      await gPatch(tk,iUrl("VA_Activity",taskId),fields);
+      fl(extraFields?"Shift updated!":"Duration updated!");
       await reload();
     }catch(e){fl("Error: "+e.message);}
   }
@@ -1094,14 +1116,14 @@ function App(){
       <div style={S.content}>
         {ck==="gdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null} filterVAs={guestVAs} isGuest={true}/>}
         {ck==="gactive"&&<ActiveView timers={timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase()))} tick={tick} isMgr={true} readOnly={true} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
-        {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
-        {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
+        {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
+        {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
         {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onBackdate={backdateFinish}/>}
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} onUpdateDuration={updateDuration} guestVAEmails={guestVAEmails}/>}
-        {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks} onAdminClockIn={adminClockIn} onClosePastDays={closePastDays} onConfirmClosePastDays={confirmClosePastDays} onResolveBlocked={resolveBlocked}/>}
+        {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs} shift={shift} tick={tick}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks} onAdminClockIn={adminClockIn} onAddBackdatedShift={addBackdatedShift} onClosePastDays={closePastDays} onConfirmClosePastDays={confirmClosePastDays} onResolveBlocked={resolveBlocked}/>}
       <div style={{background:"#0f2229",borderTop:"2px solid #CDA04B",padding:"10px 20px",textAlign:"center",marginTop:20}}>
         <div style={{fontSize:11,color:"#8aabb5",letterSpacing:"0.04em"}}>
           2025 · This application is the intellectual property of NewShire Property Management. Reproduction or use without written permission is prohibited.
@@ -1115,7 +1137,7 @@ function App(){
 // ============================================================
 // DASHBOARD — shared by Admin (all) and Manager (filtered)
 // ============================================================
-function DashboardView({data,queue,timers,covQ,shift,dfFrom,dfTo,setDfFrom,setDfTo,filterProps,filterVAs,isGuest}){
+function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,setDfFrom,setDfTo,filterProps,filterVAs,isGuest}){
   if(!data)return null;
   // Filter activities by date range and optionally by properties
   const propIds=filterProps?new Set(filterProps.map(p=>p.Title)):null;
@@ -1125,7 +1147,17 @@ function DashboardView({data,queue,timers,covQ,shift,dfFrom,dfTo,setDfFrom,setDf
   const blocked=tasks.filter(a=>a.Status==="Blocked");
   const inc=tasks.filter(a=>a.Status==="Incomplete");
   const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(actDate(a),dfFrom,dfTo)&&(!vaEmailSet||vaEmailSet.has(a.VAEmail?.toLowerCase())));
-  const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0);
+  // Add live time from any open shifts (clocked in but not yet clocked out)
+  const now=Date.now();
+  const openShifts=data.activities.filter(a=>a.ActivityType==="Shift"&&a.StartTime&&!a.EndTime&&(!vaEmailSet||vaEmailSet.has(a.VAEmail?.toLowerCase())));
+  const liveMin=openShifts.reduce((s,a)=>{
+    const start=new Date(a.StartTime).getTime();
+    return s+Math.round((now-start)/60000);
+  },0);
+  // Also add the current user's local shift if it exists and isn't in SP yet
+  const localLiveMin=shift&&!openShifts.some(o=>o.VAEmail?.toLowerCase()===myEmail)
+    ?Math.round((now-new Date(shift.ClockIn).getTime())/60000):0;
+  const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0)+liveMin+localLiveMin;
   const taskMin=done.reduce((s,a)=>s+(a.DurationMin||0),0);
   const rate=tasks.length?Math.round(done.length/tasks.length*100):0;
   const util=shiftMin>0?Math.round(taskMin/shiftMin*100):0;
@@ -1228,7 +1260,12 @@ function DashboardView({data,queue,timers,covQ,shift,dfFrom,dfTo,setDfFrom,setDf
             <tbody>
               {filteredVAs.map(va=>{
                 const vT=tasks.filter(a=>a.VAEmail===va.Email);const vD=vT.filter(a=>a.Status==="Completed");const vI=vT.filter(a=>a.Status==="Incomplete");const vB=vT.filter(a=>a.Status==="Blocked");
-                const vS=shifts.filter(a=>a.VAEmail===va.Email);const vSm=vS.reduce((s,a)=>s+(a.WorkMinutes||0),0);const vTm=vD.reduce((s,a)=>s+(a.DurationMin||0),0);
+                const vS=shifts.filter(a=>a.VAEmail===va.Email);
+                const vOpenShift=openShifts.find(o=>o.VAEmail?.toLowerCase()===va.Email.toLowerCase());
+                const vLiveMin=vOpenShift?Math.round((now-new Date(vOpenShift.StartTime).getTime())/60000):
+                  (shift&&myEmail===va.Email.toLowerCase()?Math.round((now-new Date(shift.ClockIn).getTime())/60000):0);
+                const vSm=vS.reduce((s,a)=>s+(a.WorkMinutes||0),0)+vLiveMin;
+                const vTm=vD.reduce((s,a)=>s+(a.DurationMin||0),0);
                 const vR=vT.length?Math.round(vD.length/vT.length*100):0;const vU=vSm>0?Math.round(vTm/vSm*100):0;
                 const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase());
                 const td2=today();const vaE2=va.Email.toLowerCase();
@@ -1567,6 +1604,23 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails,onUpdateDur
   const[editDurId,setEditDurId]=useState(null);
   const[editH,setEditH]=useState("");
   const[editM,setEditM]=useState("");
+  const[editShiftId,setEditShiftId]=useState(null);
+  const[esIn,setEsIn]=useState("");
+  const[esOut,setEsOut]=useState("");
+  const[esBreak,setEsBreak]=useState("");
+
+  async function saveShiftEdit(shiftId){
+    if(!esIn||!esOut||esIn>=esOut)return;
+    const ci=new Date(esIn);const co=new Date(esOut);
+    const bMin=parseInt(esBreak)||0;
+    const wMin=Math.max(0,Math.round((co-ci)/60000-bMin));
+    await onUpdateDuration(shiftId,wMin,{
+      StartTime:ci.toISOString(),EndTime:co.toISOString(),
+      BreakMinutes:bMin,WorkMinutes:wMin,
+      ActivityDate:ci.toISOString()
+    });
+    setEditShiftId(null);
+  }
 
   async function saveDuration(taskId,onSave){
     const h=parseInt(editH)||0;const m=parseInt(editM)||0;
@@ -1608,8 +1662,52 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails,onUpdateDur
               <td style={S.td}><Badge type={stBadge[t.Status]||"neutral"}>{t.Status}</Badge></td>
               <td style={S.td}></td></tr>)}
     </tbody></table>{!tasks.length&&<div style={{textAlign:"center",padding:40,color:C.gray400}}>No history.</div>}</div>}
-    {view==="shifts"&&<div style={{...S.card,overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Date","VA","In","Out","Break","Working"].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>
-      {shifts.map((s,i)=><tr key={i}><td style={{...S.td,whiteSpace:"nowrap"}}>{fD(s.ActivityDate)}</td><td style={{...S.td,fontWeight:500}}>{s.VAName}</td><td style={{...S.td,fontFamily:mono,fontSize:12}}>{fT(s.StartTime)}</td><td style={{...S.td,fontFamily:mono,fontSize:12}}>{fT(s.EndTime)}</td><td style={{...S.td,fontFamily:mono}}>{fM(s.BreakMinutes)}</td><td style={{...S.td,fontFamily:mono,fontWeight:600}}>{fM(s.WorkMinutes)}</td></tr>)}
+    {view==="shifts"&&<div style={{...S.card,overflowX:"auto"}}>
+      {!isMgr&&<div style={{fontSize:12,color:C.gray400,marginBottom:8}}>Click any row to correct times.</div>}
+      <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Date","VA","Clock In","Clock Out","Break","Worked",""].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>
+      {shifts.map((s,i)=>{
+        const isEdit=editShiftId===s.id;
+        // Flag suspiciously long shifts (over 14 hours)
+        const isSuspect=s.WorkMinutes>840;
+        return<tr key={i} style={{background:isSuspect&&!isEdit?"rgba(196,75,59,0.04)":""}}>
+          <td style={{...S.td,whiteSpace:"nowrap"}}>{fD(s.ActivityDate)}</td>
+          <td style={{...S.td,fontWeight:500}}>{s.VAName}</td>
+          {isEdit?(<>
+            <td style={S.td} colSpan={3}>
+              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                <div><div style={{fontSize:10,color:C.gray400,marginBottom:2}}>Clock In</div><input type="datetime-local" style={{...S.input,width:170,padding:"3px 6px",fontSize:12}} value={esIn} onChange={e=>setEsIn(e.target.value)}/></div>
+                <div><div style={{fontSize:10,color:C.gray400,marginBottom:2}}>Clock Out</div><input type="datetime-local" style={{...S.input,width:170,padding:"3px 6px",fontSize:12}} value={esOut} onChange={e=>setEsOut(e.target.value)}/></div>
+                <div><div style={{fontSize:10,color:C.gray400,marginBottom:2}}>Break (min)</div><input type="number" min="0" style={{...S.input,width:70,padding:"3px 6px",fontSize:12}} value={esBreak} onChange={e=>setEsBreak(e.target.value)}/></div>
+                {esIn&&esOut&&esIn<esOut&&<div style={{fontSize:11,fontWeight:600,color:C.success,alignSelf:"flex-end",paddingBottom:4}}>
+                  = {(()=>{const w=Math.max(0,Math.round((new Date(esOut)-new Date(esIn))/60000-(parseInt(esBreak)||0)));return`${Math.floor(w/60)}h ${w%60}m`;})()}
+                </div>}
+              </div>
+            </td>
+            <td style={S.td} colSpan={2}>
+              <div style={{display:"flex",gap:4}}>
+                <button style={{...S.btn(C.success),padding:"4px 10px",fontSize:12,minHeight:30,opacity:(!esIn||!esOut||esIn>=esOut)?0.5:1}} onClick={()=>saveShiftEdit(s.id)}>✓ Save</button>
+                <button style={{...S.btnO(C.gray400,C.gray200),padding:"4px 10px",fontSize:12,minHeight:30}} onClick={()=>setEditShiftId(null)}>✕</button>
+              </div>
+            </td>
+          </>):(<>
+            <td style={{...S.td,fontFamily:mono,fontSize:12}}>{fT(s.StartTime)}</td>
+            <td style={{...S.td,fontFamily:mono,fontSize:12}}>{s.EndTime?fT(s.EndTime):<span style={{color:C.warning,fontSize:11}}>Open</span>}</td>
+            <td style={{...S.td,fontFamily:mono}}>{fM(s.BreakMinutes)}</td>
+            <td style={{...S.td,fontFamily:mono,fontWeight:600,color:isSuspect?C.error:C.teal700}}>
+              {fM(s.WorkMinutes)}{isSuspect&&<span style={{fontSize:10,color:C.error,marginLeft:4}}>⚠</span>}
+            </td>
+            <td style={S.td}>{!isGuest&&<button style={{...S.btnO(C.teal600,C.teal100),padding:"3px 8px",fontSize:11,minHeight:28}} onClick={()=>{
+              setEditShiftId(s.id);
+              // Pre-fill with existing times
+              const inDt=s.StartTime?new Date(s.StartTime):new Date();
+              const outDt=s.EndTime?new Date(s.EndTime):new Date(inDt.getTime()+8*3600000);
+              setEsIn(inDt.toISOString().slice(0,16));
+              setEsOut(outDt.toISOString().slice(0,16));
+              setEsBreak(String(s.BreakMinutes||0));
+            }}>✏ Edit</button>}</td>
+          </>)}
+        </tr>;
+      })}
     </tbody></table>{!shifts.length&&<div style={{textAlign:"center",padding:40,color:C.gray400}}>No shifts.</div>}</div>}
   </div>);
 }
@@ -1617,7 +1715,7 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails,onUpdateDur
 // ============================================================
 // SCORECARD VIEW
 // ============================================================
-function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps,guestVAs}){
+function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps,guestVAs,shift,tick}){
   const[selVa,setSelVa]=useState(myEmail);
   if(!data)return null;
   const isGuest=role==="guest";
@@ -1631,7 +1729,12 @@ function ScorecardView({data,role,myEmail,isMgr,myVa,myProps,mgrProps,guestVAs})
   const done=tasks.filter(t=>t.Status==="Completed");const blocked=tasks.filter(t=>t.Status==="Blocked");const cov=tasks.filter(t=>t.CoverageForEmail);
   const taskMin=done.reduce((s,t)=>s+(t.DurationMin||0),0);const rate=tasks.length?Math.round(done.length/tasks.length*100):0;
   const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaEmail&&dAgo(actDate(a))<=per);
-  const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0);const breakMin=shifts.reduce((s,a)=>s+(a.BreakMinutes||0),0);
+  const scoreNow=Date.now();
+  const openScoreShift=data.activities.find(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaEmail&&a.StartTime&&!a.EndTime);
+  const scoreLiveMin=openScoreShift?Math.round((scoreNow-new Date(openScoreShift.StartTime).getTime())/60000):
+    (shift&&myEmail===vaEmail?Math.round((scoreNow-new Date(shift.ClockIn).getTime())/60000):0);
+  const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0)+scoreLiveMin;
+  const breakMin=shifts.reduce((s,a)=>s+(a.BreakMinutes||0),0);
   const util=shiftMin>0?Math.round(taskMin/shiftMin*100):0;const gap=Math.max(0,shiftMin-taskMin);
   const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===vaEmail);
   const vaPropsL=port.map(p=>data.properties.find(pr=>pr.Title===p.PropertyId)).filter(Boolean);
@@ -1695,9 +1798,10 @@ function BackdatePanel({data,onBackdate}){
 // ============================================================
 // ADMIN VIEW
 // ============================================================
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate,onAdminClockIn,onClosePastDays,onConfirmClosePastDays,onResolveBlocked}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate,onAdminClockIn,onAddBackdatedShift,onClosePastDays,onConfirmClosePastDays,onResolveBlocked}){
   const[showAssign,setShowAssign]=useState(false);
   const[staleTasks,setStaleTasks]=useState(null);
+  const[bsVa,setBsVa]=useState("");const[bsIn,setBsIn]=useState("");const[bsOut,setBsOut]=useState("");const[bsBreak,setBsBreak]=useState("0");
   const[adminCiVa,setAdminCiVa]=useState("");
   const[adminCiTime,setAdminCiTime]=useState(()=>{const d=new Date();d.setSeconds(0,0);return d.toISOString().slice(0,16);});const[staleNotes,setStaleNotes]=useState("Closed retroactively");
   const[blockedFilter,setBlockedFilter]=useState("");const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");
@@ -1710,7 +1814,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
   // Category management
   const[showAddCat,setShowAddCat]=useState(false);const[ncName,setNcName]=useState("");const[ncIcon,setNcIcon]=useState("folder");
   const[editCatId,setEditCatId]=useState(null);const[ecName,setEcName]=useState("");const[ecIcon,setEcIcon]=useState("folder");const[showEcIcons,setShowEcIcons]=useState(false);
-  const[openSections,setOpenSections]=useState({absence:true,assign:false,recurring:false,portfolio:false,properties:false,categories:false,guests:false,report:false,closeday:true,cleanup:false,queue:false,pastclose:false,blocked:true});
+  const[openSections,setOpenSections]=useState({absence:true,assign:false,recurring:false,portfolio:false,properties:false,categories:false,guests:false,report:false,closeday:true,cleanup:false,queue:false,pastclose:false,blocked:true,addshift:false});
   function toggleSection(k){setOpenSections(p=>({...p,[k]:!p[k]}));}
 
   if(!data)return null;
@@ -2077,7 +2181,50 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
     {/* Queued Task Management */}
     {queue.length>0&&<AdminQueuePanel queue={queue} covQ={covQ} data={data} onDeleteTask={onDeleteTask} onCompleteSubTask={onCompleteSubTask}/>}
 
-    {/* Retroactive Past Day Close */}
+    {/* Add Backdated Shift */}
+    <div style={{...S.card,borderLeft:`3px solid ${C.teal500}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("addshift")}>
+        <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>🕐 Add Missed Shift</div><div style={{fontSize:12,color:C.gray400}}>Record a clock-in/out for a previous day</div></div>
+        <span style={{color:C.gray400}}>{openSections.addshift?"▲":"▼"}</span>
+      </div>
+      {openSections.addshift&&<div style={{marginTop:14}}>
+        <div style={S.row}>
+          <div style={{flex:1,minWidth:140}}><label style={S.label}>VA *</label>
+            <select style={S.select} value={bsVa} onChange={e=>setBsVa(e.target.value)}>
+              <option value="">Select VA...</option>
+              {data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}
+            </select>
+          </div>
+          <div style={{flex:1,minWidth:160}}><label style={S.label}>Clock In *</label>
+            <input type="datetime-local" style={S.input} value={bsIn} onChange={e=>setBsIn(e.target.value)}/>
+          </div>
+          <div style={{flex:1,minWidth:160}}><label style={S.label}>Clock Out *</label>
+            <input type="datetime-local" style={S.input} value={bsOut} onChange={e=>setBsOut(e.target.value)}/>
+          </div>
+          <div style={{minWidth:100}}><label style={S.label}>Break (min)</label>
+            <input type="number" min="0" max="480" style={S.input} value={bsBreak} onChange={e=>setBsBreak(e.target.value)} placeholder="0"/>
+          </div>
+        </div>
+        {bsIn&&bsOut&&bsIn<bsOut&&(()=>{
+          const ci=new Date(bsIn);const co=new Date(bsOut);
+          const totalMs=co-ci;const bMs=(parseInt(bsBreak)||0)*60000;
+          const workMin=Math.max(0,Math.round((totalMs-bMs)/60000));
+          const breakMin=parseInt(bsBreak)||0;
+          return<div style={{marginTop:10,padding:"8px 12px",background:C.teal50,borderRadius:4,fontSize:12,color:C.teal700}}>
+            <strong>Preview:</strong> {new Date(bsIn).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})} · {new Date(bsIn).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} → {new Date(bsOut).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} · Break: {breakMin}m · <strong>Worked: {Math.floor(workMin/60)}h {workMin%60}m</strong>
+          </div>;
+        })()}
+        <button style={{...S.btn(C.teal500),width:"100%",marginTop:12,opacity:(!bsVa||!bsIn||!bsOut||bsIn>=bsOut)?0.5:1}}
+          onClick={()=>{
+            if(!bsVa||!bsIn||!bsOut||bsIn>=bsOut)return;
+            const va=data.vas.find(v=>v.Email===bsVa);
+            onAddBackdatedShift(bsVa,va?.Name||bsVa,bsIn,bsOut,parseInt(bsBreak)||0);
+            setBsVa("");setBsIn("");setBsOut("");setBsBreak("0");
+          }}>✓ Save Shift</button>
+      </div>}
+    </div>
+
+        {/* Retroactive Past Day Close */}
     <div style={{...S.card,borderLeft:`3px solid ${C.warning}`}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>toggleSection("pastclose")}>
         <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>📅 Retroactive Day Close</div><div style={{fontSize:12,color:C.gray400}}>Mark unfinished tasks from previous days as Incomplete</div></div>
