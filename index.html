@@ -830,6 +830,16 @@ function App(){
   }
 
   // ── Retroactive Close Past Days ──
+  // ── Update task duration ──
+  async function updateDuration(taskId,durationMin){
+    try{
+      const tk=await gT();
+      await gPatch(tk,iUrl("VA_Activity",taskId),{DurationMin:durationMin});
+      fl("Duration updated!");
+      await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+
   // ── Admin: manually record shift start for a VA ──
   async function adminClockIn(vaEmail,vaName,startTime){
     try{
@@ -1089,7 +1099,7 @@ function App(){
         {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onBackdate={backdateFinish}/>}
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
-        {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} guestVAEmails={guestVAEmails}/>}
+        {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} onUpdateDuration={updateDuration} guestVAEmails={guestVAEmails}/>}
         {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs}/>}
         {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks} onAdminClockIn={adminClockIn} onClosePastDays={closePastDays} onConfirmClosePastDays={confirmClosePastDays} onResolveBlocked={resolveBlocked}/>}
       <div style={{background:"#0f2229",borderTop:"2px solid #CDA04B",padding:"10px 20px",textAlign:"center",marginTop:20}}>
@@ -1552,8 +1562,20 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
 // ============================================================
 // HISTORY VIEW
 // ============================================================
-function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails}){
+function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails,onUpdateDuration}){
   const[view,setView]=useState("tasks");
+  const[editDurId,setEditDurId]=useState(null);
+  const[editH,setEditH]=useState("");
+  const[editM,setEditM]=useState("");
+
+  async function saveDuration(taskId,onSave){
+    const h=parseInt(editH)||0;const m=parseInt(editM)||0;
+    const total=h*60+m;
+    if(isNaN(total)||total<0)return;
+    await onSave(taskId,total);
+    setEditDurId(null);
+  }
+
   if(!data)return null;
   const isGuest=role==="guest";
   const propFilter=role==="manager"?new Set(mgrProps.map(p=>p.Title)):null;
@@ -1564,8 +1586,27 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps,guestVAEmails}){
   return(<div>
     {isGuest&&<div style={{background:C.purpleBg,border:`1px solid ${C.purple}`,borderRadius:6,padding:"8px 14px",marginBottom:12,fontSize:12,color:C.purple}}>👁️ Read-only — task history for your assigned VAs</div>}
     <div style={{display:"flex",gap:8,marginBottom:12}}><button style={view==="tasks"?S.btn(C.headerBg):S.btnO(C.teal700,C.teal100)} onClick={()=>setView("tasks")}>Tasks</button>{role!=="manager"&&!isGuest&&<button style={view==="shifts"?S.btn(C.headerBg):S.btnO(C.teal700,C.teal100)} onClick={()=>setView("shifts")}>Shifts</button>}</div>
-    {view==="tasks"&&<div style={{...S.card,overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Date","VA","Task","Property","Source","Duration","Status"].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>
-      {tasks.map((t,i)=><tr key={i}><td style={{...S.td,whiteSpace:"nowrap"}}>{fD(t.ActivityDate)}</td><td style={{...S.td,fontWeight:500,fontSize:12}}>{t.VAName}</td><td style={{...S.td,maxWidth:200}}>{t.Title}{t.CoverageForName&&<div style={{fontSize:10,color:C.warning}}>{"\u{1F504}"} coverage for {t.CoverageForName}</div>}{t.Notes&&<div style={{fontSize:11,color:C.gray400}}>{"\u{1F4AC}"} {t.Notes}</div>}</td><td style={{...S.td,fontSize:12}}>{t.PropertyName}</td><td style={S.td}><Badge type={srcBadge[t.Source]||"neutral"}>{t.Source}</Badge></td><td style={{...S.td,fontFamily:mono,fontWeight:600,fontSize:12}}>{t.DurationMin?fM(t.DurationMin):"\u2014"}</td><td style={S.td}><Badge type={stBadge[t.Status]||"neutral"}>{t.Status}</Badge></td></tr>)}
+    {view==="tasks"&&<div style={{...S.card,overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Date","VA","Task","Property","Source","Duration","Status",""].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>
+      {tasks.map((t,i)=><tr key={i}><td style={{...S.td,whiteSpace:"nowrap"}}>{fD(t.ActivityDate)}</td><td style={{...S.td,fontWeight:500,fontSize:12}}>{t.VAName}</td><td style={{...S.td,maxWidth:200}}>{t.Title}{t.CoverageForName&&<div style={{fontSize:10,color:C.warning}}>{"\u{1F504}"} coverage for {t.CoverageForName}</div>}{t.Notes&&<div style={{fontSize:11,color:C.gray400}}>{"\u{1F4AC}"} {t.Notes}</div>}</td><td style={{...S.td,fontSize:12}}>{t.PropertyName}</td><td style={S.td}><Badge type={srcBadge[t.Source]||"neutral"}>{t.Source}</Badge></td><td style={{...S.td,fontFamily:mono,fontWeight:600,fontSize:12}}>
+                {editDurId===t.id?(
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <input type="number" min="0" max="99" style={{...S.input,width:44,padding:"3px 6px",fontSize:12,textAlign:"center"}} value={editH} onChange={e=>setEditH(e.target.value)} placeholder="h" autoFocus/>
+                    <span style={{color:C.gray400,fontSize:11}}>h</span>
+                    <input type="number" min="0" max="59" style={{...S.input,width:44,padding:"3px 6px",fontSize:12,textAlign:"center"}} value={editM} onChange={e=>setEditM(e.target.value)} placeholder="m"/>
+                    <span style={{color:C.gray400,fontSize:11}}>m</span>
+                    <button style={{...S.btn(C.success),padding:"3px 8px",fontSize:11,minHeight:28}} onClick={()=>saveDuration(t.id,onUpdateDuration)}>✓</button>
+                    <button style={{...S.btnO(C.gray400,C.gray200),padding:"3px 8px",fontSize:11,minHeight:28}} onClick={()=>setEditDurId(null)}>✕</button>
+                  </div>
+                ):(
+                  <span style={{cursor:"pointer",borderBottom:`1px dashed ${C.gray300}`}} title="Click to edit" onClick={()=>{
+                    setEditDurId(t.id);
+                    setEditH(String(Math.floor((t.DurationMin||0)/60)));
+                    setEditM(String((t.DurationMin||0)%60));
+                  }}>{t.DurationMin?fM(t.DurationMin):"—"}</span>
+                )}
+              </td>
+              <td style={S.td}><Badge type={stBadge[t.Status]||"neutral"}>{t.Status}</Badge></td>
+              <td style={S.td}></td></tr>)}
     </tbody></table>{!tasks.length&&<div style={{textAlign:"center",padding:40,color:C.gray400}}>No history.</div>}</div>}
     {view==="shifts"&&<div style={{...S.card,overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Date","VA","In","Out","Break","Working"].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>
       {shifts.map((s,i)=><tr key={i}><td style={{...S.td,whiteSpace:"nowrap"}}>{fD(s.ActivityDate)}</td><td style={{...S.td,fontWeight:500}}>{s.VAName}</td><td style={{...S.td,fontFamily:mono,fontSize:12}}>{fT(s.StartTime)}</td><td style={{...S.td,fontFamily:mono,fontSize:12}}>{fT(s.EndTime)}</td><td style={{...S.td,fontFamily:mono}}>{fM(s.BreakMinutes)}</td><td style={{...S.td,fontFamily:mono,fontWeight:600}}>{fM(s.WorkMinutes)}</td></tr>)}
