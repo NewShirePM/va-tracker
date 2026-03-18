@@ -278,6 +278,8 @@ function App(){
   const[myEmp,setMyEmp]=useState(null);
   const[flash,setFlash]=useState("");const[lastSync,setLastSync]=useState(null);const[syncing,setSyncing]=useState(false);
   const[timers,setTimers]=useState([]);
+  const timersRef=useRef([]);
+  useEffect(()=>{timersRef.current=timers;},[timers]);
   const[shift,setShift]=useState(()=>{
     try{
       const saved=sessionStorage.getItem("va_shift_"+(window._vatEmail||""));
@@ -370,17 +372,23 @@ function App(){
     persistedQueued.forEach(a=>{
       const t={...a,_localId:a.id,_spId:a.id};
       if(a.Status==="In Progress"){
-        // Restore as active timer — check sessionStorage for paused state
-        const pausedStore=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");
-        const pausedData=pausedStore[a.id]||pausedStore[t._localId];
-        const timerTask={
-          ...t,
-          StartTime:a.StartTime||new Date().toISOString(),
-          _pMs:pausedData?pausedData.pMs||0:0,
-          _pS:pausedData?pausedData.pausedAt:null  // restore as paused if it was paused
-        };
-        tm.push(timerTask);
-      } else if(a.Source==="Coverage"||a.CoverageForEmail){cv.push(t);}
+        // If this timer is already live in state, preserve it exactly — never reset pause state mid-session
+        const liveTimer=timersRef.current.find(x=>x._spId===a.id||x._localId===a.id);
+        if(liveTimer){
+          tm.push(liveTimer); // keep accumulated _pMs and _pS intact
+        }else{
+          // New restore (page load or first seen) — check sessionStorage for paused state
+          const pausedStore=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");
+          const pausedData=pausedStore[a.id]||pausedStore[t._localId];
+          const timerTask={
+            ...t,
+            StartTime:a.StartTime||new Date().toISOString(),
+            _pMs:pausedData?pausedData.pMs||0:0,
+            _pS:pausedData?pausedData.pausedAt:null
+          };
+          tm.push(timerTask);
+        }
+      } else if(a.Source==="Coverage"&&a.CoverageForEmail){cv.push(t);}
       else{q.push(t);}
     });
     if(tm.length>0){setTimers(tm);console.log("[VT] Restored",tm.length,"active timers");}
@@ -671,11 +679,74 @@ function App(){
   }
 
   // ── Coverage ──
+  async function unclaimTask(task){
+    const origForEmail=task.CoverageForEmail||task.VAEmail;
+    const origForName=task.CoverageForName||task.VAName;
+    if(task._spId){
+      try{
+        const tk=await gT();
+        await gPatch(tk,iUrl("VA_Activity",task._spId),{
+          Source:"Coverage",
+          VAEmail:origForEmail,VAName:origForName,
+          CoverageForEmail:origForEmail,CoverageForName:origForName
+        });
+      }catch(e){console.warn("[VT] Unclaim patch failed:",e);}
+    }
+    setQueue(p=>p.filter(t=>t._localId!==task._localId));
+    setCovQ(p=>[{...task,Source:"Coverage",VAEmail:origForEmail,VAName:origForName,CoverageForEmail:origForEmail,CoverageForName:origForName},...p]);
+    fl("Task returned to coverage pool");
+  }
+
+  async function requestHelp(task){
+    try{
+      const tk=await gT();
+      // Create a linked helper task in SP — Source:"Help", HelpForEmail tracks original VA
+      const res=await gPost(tk,lUrl("VA_Activity"),{
+        Title:task.Title,ActivityType:"Task",
+        VAEmail:task.VAEmail,VAName:task.VAName,
+        PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",
+        PMName:task.PMName||"",Category:task.Category,
+        Source:"Coverage",Priority:task.Priority||"Normal",
+        Status:"Queued",ActivityDate:task.ActivityDate||today(),
+        CoverageForEmail:task.VAEmail,CoverageForName:task.VAName,
+        Notes:(task.Notes?task.Notes+" · ":"")+"Help requested",
+        AssignedByEmail:task.VAEmail,AssignedByName:task.VAName
+      });
+      // Also patch original task to flag it has help pending
+      if(task._spId){
+        await gPatch(tk,iUrl("VA_Activity",task._spId),{Notes:(task.Notes?task.Notes+" · ":"")+"Help requested"});
+      }
+      const saved={...task,Title:task.Title,_localId:res.id,_spId:res.id,id:res.id,
+        Source:"Coverage",CoverageForEmail:task.VAEmail,CoverageForName:task.VAName,
+        Notes:(task.Notes?task.Notes+" · ":"")+"Help requested"};
+      setCovQ(p=>[saved,...p]);
+      fl("Help requested — other VAs can now claim this task");
+    }catch(e){fl("Error: "+e.message);}
+  }
+
   async function claimCov(id){
     const t=covQ.find(x=>x._localId===id);if(!t)return;
     const meVa=myEmp?.Name||myEmail;
-    if(t._spId){try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",t._spId),{VAEmail:myEmail,VAName:meVa});}catch(e){console.warn("[VT] Claim patch failed:",e);}}
-    setCovQ(p=>p.filter(x=>x._localId!==id));setQueue(p=>[{...t,VAEmail:myEmail,VAName:meVa},...p]);fl(`Claimed! Covering for ${t.CoverageForName}`);
+    const isHelp=t.Notes?.includes("Help requested");
+    if(t._spId){
+      try{
+        const tk=await gT();
+        await gPatch(tk,iUrl("VA_Activity",t._spId),{
+          VAEmail:myEmail,VAName:meVa,
+          Source:"Assigned",
+          CoverageForEmail:"",CoverageForName:"",
+          Notes:isHelp?`Assisted by ${meVa}`:(t.Notes||"")
+        });
+      }catch(e){console.warn("[VT] Claim patch failed:",e);}
+    }
+    const claimedTask={...t,VAEmail:myEmail,VAName:meVa,Source:"Assigned",
+      CoverageForEmail:"",CoverageForName:"",
+      Notes:isHelp?`Assisted by ${meVa}`:(t.Notes||""),
+      _assistedFor:isHelp?t.CoverageForName:null
+    };
+    setCovQ(p=>p.filter(x=>x._localId!==id));
+    setQueue(p=>[claimedTask,...p]);
+    fl(isHelp?`Helping ${t.CoverageForName} with "${t.Title}"`:`Claimed! Covering for ${t.CoverageForName}`);
   }
 
   // ── Close Day ──
@@ -1118,7 +1189,7 @@ function App(){
         {ck==="gactive"&&<ActiveView timers={timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase()))} tick={tick} isMgr={true} readOnly={true} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
         {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
-        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
+        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onUnclaimTask={unclaimTask} onRequestHelp={requestHelp} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onBackdate={backdateFinish}/>}
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} onUpdateDuration={updateDuration} guestVAEmails={guestVAEmails}/>}
@@ -1298,7 +1369,7 @@ function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,se
 // ============================================================
 // TASK ROW
 // ============================================================
-function TaskRow({task,onStart,onDelete,showVA,onComplete,compact}){
+function TaskRow({task,onStart,onDelete,showVA,onComplete,compact,onUnclaim,onRequestHelp}){
   return(<div style={{display:"flex",alignItems:"center",gap:8,padding:compact?"5px 0":"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
     <span style={{fontSize:compact?13:16}}>{getIcon(task.icon,task.Category)}</span>
     <div style={{flex:1,minWidth:0}}>
@@ -1311,6 +1382,8 @@ function TaskRow({task,onStart,onDelete,showVA,onComplete,compact}){
       {task.Status!=="Completed"&&task.Status!=="Blocked"&&onComplete&&<button style={{...S.btnO(C.success,C.success),...S.btnSm,padding:"3px 8px",fontSize:11}} onClick={()=>onComplete(task,"Completed","")}>{"\u2713"}</button>}
       {task.Status!=="Completed"&&task.Status!=="Blocked"&&onComplete&&<button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:11}} onClick={()=>{const n=prompt("What\'s blocking?");if(n!==null)onComplete(task,"Blocked",n);}}>{"\u26A0"}</button>}
       {onStart&&task.Status!=="Completed"&&task.Status!=="Blocked"&&<button style={{...S.btn(C.success),...S.btnSm}} onClick={onStart}>{"\u25B6"} Start</button>}
+      {onRequestHelp&&task.Status!=="Completed"&&task.Status!=="Blocked"&&<button style={{...S.btnO(C.info,C.info),...S.btnSm,padding:"5px 8px",fontSize:11}} title="Ask another VA for help" onClick={()=>{if(window.confirm(`Request help from another VA on "${task.Title}"? It stays in your queue but others can claim a copy.`))onRequestHelp(task);}}>🤝 Help</button>}
+      {onUnclaim&&task.Status!=="Completed"&&task.Status!=="Blocked"&&<button style={{...S.btnO(C.warning,C.warning),...S.btnSm,padding:"5px 8px",fontSize:11}} title="Return to coverage pool" onClick={()=>{if(window.confirm("Return this task to the coverage pool?"))onUnclaim(task);}}>↩ Unclaim</button>}
       {onDelete&&<button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"5px 8px"}} onClick={()=>{if(window.confirm("Remove this task?"))onDelete(task);}} title="Remove task">{"\u2715"}</button>}
     </div>
   </div>);
@@ -1399,7 +1472,7 @@ function groupTasks(tasks,allowFallback=false){
 // ============================================================
 // MY TASKS (VA view)
 // ============================================================
-function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onAddTask,onDeleteTask,onCompleteSubTask,config}){
+function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onUnclaimTask,onRequestHelp,onAddTask,onDeleteTask,onCompleteSubTask,config}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   const isAdm=role==="admin";
   const myTasks=isAdm?queue:queue.filter(t=>t.VAEmail&&t.VAEmail.toLowerCase()===myEmail);
@@ -1438,9 +1511,15 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
     {/* Coverage */}
     {covQ.length>0&&(<div style={{...S.card,borderLeft:`3px solid ${C.warning}`,background:C.warningBg}}>
       <div style={{fontSize:15,fontWeight:600,color:C.warning,marginBottom:8}}>{"\u{1F6A8}"} Coverage Needed ({covQ.length})</div>
-      {covQ.map(t=><div key={t._localId} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid rgba(212,150,10,0.1)"}}>
-        <span>{catIcon[t.Category]||"\u{1F4C1}"}</span><div style={{flex:1}}><div style={{fontSize:13,fontWeight:500,color:C.teal700}}>{t.Title}</div><div style={{fontSize:11,color:C.gray400}}>{t.PropertyName} · covering {t.CoverageForName}</div></div>
-        <button style={{...S.btn(C.warning,C.dark),...S.btnSm}} onClick={()=>onClaimCov(t._localId)}>{"\u270B"} Claim</button></div>)}
+      {covQ.map(t=>{
+        const isHelp=t.Notes?.includes("Help requested");
+        return<div key={t._localId} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid rgba(212,150,10,0.1)"}}>
+        <span>{catIcon[t.Category]||"\u{1F4C1}"}</span>
+        <div style={{flex:1}}>
+          <div style={{fontSize:13,fontWeight:500,color:C.teal700}}>{t.Title}</div>
+          <div style={{fontSize:11,color:C.gray400}}>{t.PropertyName} · {isHelp?`🤝 Help needed — ${t.CoverageForName} is requesting assistance`:`covering ${t.CoverageForName}`}</div>
+        </div>
+        <button style={{...S.btn(isHelp?C.info:C.warning,C.dark),...S.btnSm}} onClick={()=>onClaimCov(t._localId)}>{isHelp?"🤝 Help":"✋ Claim"}</button></div>)}
     </div>)}
     {/* Daily */}
     <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",...(daily.length?{paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:6}:{})}}><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Daily Tasks</div><span style={{fontSize:12,color:C.gray400}}>{daily.length} left</span></div>
@@ -1450,10 +1529,21 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
         :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
       )}</div>
     {/* Assigned */}
-    {assigned.length>0&&<div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Assigned & Coverage ({assigned.length})</div>{groupTasks(assigned).map((item,i)=>item.type==="single"
-        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
-        :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
-      )}</div>}
+    {assigned.length>0&&<div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
+      <div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Assigned & Coverage ({assigned.length})</div>
+      {groupTasks(assigned).map((item,i)=>{
+        const t=item.type==="single"?item.task:item.tasks[0];
+        const isCovClaimed=t.CoverageForName&&!t.CoverageForEmail; // claimed from coverage
+        const isAssisted=t._assistedFor||t.Notes?.startsWith("Assisted by");
+        return item.type==="single"
+          ?<div key={t._localId}>
+            {isAssisted&&<div style={{fontSize:11,color:C.info,fontWeight:600,marginBottom:2,paddingLeft:24}}>🤝 Assisting {t._assistedFor||""} — this task stays in their queue too</div>}
+            <TaskRow task={t} onStart={()=>onStartTimer(t)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}
+              onUnclaim={isCovClaimed&&onUnclaimTask?()=>onUnclaimTask(t):null}
+              onRequestHelp={!isAssisted?()=>onRequestHelp(t):null}/>
+          </div>
+          :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>;
+      })}</div>}
     {/* Ad-Hoc */}
     {adhoc.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4DD}"} Extra ({adhoc.length})</div>{groupTasks(adhoc).map((item,i)=>item.type==="single"
         ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
