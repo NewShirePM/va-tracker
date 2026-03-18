@@ -1513,13 +1513,14 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
       <div style={{fontSize:15,fontWeight:600,color:C.warning,marginBottom:8}}>{"\u{1F6A8}"} Coverage Needed ({covQ.length})</div>
       {covQ.map(t=>{
         const isHelp=t.Notes?.includes("Help requested");
-        return<div key={t._localId} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid rgba(212,150,10,0.1)"}}>
+        return(<div key={t._localId} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid rgba(212,150,10,0.1)"}}>
         <span>{catIcon[t.Category]||"\u{1F4C1}"}</span>
         <div style={{flex:1}}>
           <div style={{fontSize:13,fontWeight:500,color:C.teal700}}>{t.Title}</div>
           <div style={{fontSize:11,color:C.gray400}}>{t.PropertyName} · {isHelp?`🤝 Help needed — ${t.CoverageForName} is requesting assistance`:`covering ${t.CoverageForName}`}</div>
         </div>
-        <button style={{...S.btn(isHelp?C.info:C.warning,C.dark),...S.btnSm}} onClick={()=>onClaimCov(t._localId)}>{isHelp?"🤝 Help":"✋ Claim"}</button></div>)}
+        <button style={{...S.btn(isHelp?C.info:C.warning,C.dark),...S.btnSm}} onClick={()=>onClaimCov(t._localId)}>{isHelp?"🤝 Help":"✋ Claim"}</button></div>);
+      })}
     </div>)}
     {/* Daily */}
     <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",...(daily.length?{paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:6}:{})}}><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Daily Tasks</div><span style={{fontSize:12,color:C.gray400}}>{daily.length} left</span></div>
