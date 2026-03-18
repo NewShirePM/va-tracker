@@ -1543,7 +1543,7 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
     <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",...(daily.length?{paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:6}:{})}}><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Daily Tasks</div><span style={{fontSize:12,color:C.gray400}}>{daily.length} left</span></div>
       {!daily.length&&<p style={{color:C.gray400,fontSize:13,marginTop:10}}>All done!</p>}
       {groupTasks(daily).map((item,i)=>item.type==="single"
-        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
+        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask} onRequestHelp={()=>onRequestHelp(item.task)}/>
         :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
       )}</div>
     {/* Assigned */}
@@ -1557,19 +1557,19 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
           ?<div key={t._localId}>
             {isAssisted&&<div style={{fontSize:11,color:C.info,fontWeight:600,marginBottom:2,paddingLeft:24}}>🤝 Assisting {t._assistedFor||""} — this task stays in their queue too</div>}
             <TaskRow task={t} onStart={()=>onStartTimer(t)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}
-              onUnclaim={isCovClaimed&&onUnclaimTask?()=>onUnclaimTask(t):null}
-              onRequestHelp={!isAssisted?()=>onRequestHelp(t):null}/>
+              onUnclaim={(isCovClaimed||isAssisted)&&onUnclaimTask?()=>onUnclaimTask(t):null}
+              onRequestHelp={!isCovClaimed&&!isAssisted?()=>onRequestHelp(t):null}/>
           </div>
           :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>;
       })}</div>}
     {/* Ad-Hoc */}
     {adhoc.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4DD}"} Extra ({adhoc.length})</div>{groupTasks(adhoc).map((item,i)=>item.type==="single"
-        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
+        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask} onRequestHelp={()=>onRequestHelp(item.task)}/>
         :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
       )}</div>}
     {/* Catch-all for any other source types */}
     {other.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Other ({other.length})</div>{groupTasks(other).map((item,i)=>item.type==="single"
-        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}/>
+        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask} onRequestHelp={()=>onRequestHelp(item.task)}/>
         :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
       )}</div>}
     {/* Add Task */}
