@@ -159,7 +159,7 @@ function actDate(a){return a.ActivityDate||a.EndTime||a.StartTime||a.Created||a.
 // ============================================================
 // GRAPH API
 // ============================================================
-async function gGet(token,url){const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error(`GET ${r.status}`);return r.json();}
+async function gGet(token,url){const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error(`GET ${r.status} ${url.split("lists/")[1]?.split("/")[0]||""}`);return r.json();}
 async function gAll(token,url){let a=[],n=url;while(n){const d=await gGet(token,n);a=a.concat(d.value||[]);n=d["@odata.nextLink"]||null;}return a;}
 async function gPost(token,url,fields){const r=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify({fields})});if(!r.ok){let errBody="";try{const ej=await r.json();errBody=JSON.stringify(ej?.error||ej).slice(0,300);}catch{}throw new Error(`POST ${r.status}: ${errBody}`);}return r.json();}
 async function gPatch(token,url,fields){const r=await fetch(url,{method:"PATCH",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(fields)});if(!r.ok){let errBody="";try{const ej=await r.json();errBody=JSON.stringify(ej?.error||ej).slice(0,300);}catch{}throw new Error(`PATCH ${r.status}: ${errBody}`);}return r.json();}
@@ -167,7 +167,7 @@ function lUrl(n){return`${SITE}/lists/${n}/items`;}
 async function gRawPost(token,url,body){const r=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(body)});if(!r.ok){const t=await r.text();throw new Error(`POST ${r.status}: ${t}`);}return r.json();}
 function iUrl(n,id){return`${SITE}/lists/${n}/items/${id}/fields`;}
 
-async function safeGet(token,name,url){try{console.log(`[VT] Loading ${name}...`);const r=await gAll(token,url);console.log(`[VT] ${name}: ${r.length}`);return r;}catch(e){console.error(`[VT] ${name} FAILED: ${e.message}`,url);return[];}}
+async function safeGet(token,name,url){try{const r=await gAll(token,url);console.log(`[VT] ${name}: ${r.length}`);return r;}catch(e){if(!e.message?.includes("404"))console.warn(`[VT] ${name} failed: ${e.message}`);return[];}}
 
 async function safeGetRaw(token,url){
   const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
@@ -222,15 +222,32 @@ async function gPostActivity(token,fields){
   }
 }
 
+// Cache failed list names so we don't retry on every poll
+const _listCache={newHiresName:null,newHiresFailed:false,guestsFailed:false};
+
 async function loadAll(token){
   const[eR,nhR,cR,pR,ptR,aR,gR]=await Promise.all([
     safeGet(token,"Employees",`${lUrl("Employees")}?expand=fields&$top=200`),
-    (async()=>{for(const n of["NewHires","New%20Hires","New_Hires"]){try{const r=await gAll(token,`${lUrl(n)}?expand=fields&$top=200`);console.log("[VT] New Hires found as:",n,r.length);return r;}catch(e){}}console.warn("[VT] New Hires list not found under any name");return[];})(),
+    (async()=>{
+      if(_listCache.newHiresFailed)return[];
+      if(_listCache.newHiresName){
+        try{return await gAll(token,`${lUrl(_listCache.newHiresName)}?expand=fields&$top=200`);}catch(e){return[];}
+      }
+      for(const n of["NewHires","New%20Hires","New_Hires","VA_NewHires"]){
+        try{const r=await gAll(token,`${lUrl(n)}?expand=fields&$top=200`);_listCache.newHiresName=n;console.log("[VT] New Hires found as:",n);return r;}catch(e){}
+      }
+      _listCache.newHiresFailed=true;
+      return[];
+    })(),
     safeGet(token,"Config",`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
     safeGet(token,"Properties",`${lUrl("VA_Properties")}?expand=fields&$top=200`),
     safeGet(token,"Portfolios",`${lUrl("VA_Portfolios")}?expand=fields&$top=200`),
     safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=1000`),
-    safeGet(token,"Guests",`${lUrl("VA_Guests")}?expand=fields&$top=200`),
+    (async()=>{
+      if(_listCache.guestsFailed)return[];
+      try{return await gAll(token,`${lUrl("VA_Guests")}?expand=fields&$top=200`);}
+      catch(e){_listCache.guestsFailed=true;return[];}
+    })(),
   ]);
   // Merge both lists, deduplicate by email
   const allEmpRaw=[...eR,...nhR].map(e=>({id:e.id,...e.fields}));
