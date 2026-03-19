@@ -311,6 +311,7 @@ function App(){
   const[role,setRole]=useState(null);
   const[myEmail,setMyEmail]=useState(null);
   const[myEmp,setMyEmp]=useState(null);
+  const[viewAs,setViewAs]=useState(null); // {role,email,name} — admin preview mode
   const[flash,setFlash]=useState("");const[lastSync,setLastSync]=useState(null);const[syncing,setSyncing]=useState(false);
   const[timers,setTimers]=useState([]);
   const timersRef=useRef([]);
@@ -1281,12 +1282,20 @@ function App(){
   const isMgr=role==="admin"||role==="manager";
   const isVA=role==="va";
   const isGuest=role==="guest";
-  const myVa=data?.vas.find(v=>v.Email&&v.Email.toLowerCase()===myEmail);
-  const myPort=data?data.portfolios.filter(p=>p.VAEmail&&p.VAEmail.toLowerCase()===myEmail):[];
+
+  // viewAs: admin previews as another user
+  const effectiveRole=viewAs?viewAs.role:role;
+  const effectiveEmail=viewAs?viewAs.email:myEmail;
+  const effectiveIsAdmin=effectiveRole==="admin";
+  const effectiveIsMgr=effectiveRole==="admin"||effectiveRole==="manager";
+  const effectiveIsVA=effectiveRole==="va";
+
+  const myVa=data?.vas.find(v=>v.Email&&v.Email.toLowerCase()===effectiveEmail);
+  const myPort=data?data.portfolios.filter(p=>p.VAEmail&&p.VAEmail.toLowerCase()===effectiveEmail):[];
   const myProps=data?myPort.map(p=>data.properties.find(pr=>pr.Title===p.PropertyId)).filter(Boolean):[];
-  const mgrProps=myManagedProps();
-  const myQ=queue.filter(t=>isVA?(t.VAEmail&&t.VAEmail.toLowerCase()===myEmail):true);
-  const myTm=timers.filter(t=>isVA?t.VAEmail.toLowerCase()===myEmail:true);
+  const mgrProps=(()=>{if(!data||!effectiveEmail)return[];return data.properties.filter(p=>p.PMEmail?.toLowerCase()===effectiveEmail);})();
+  const myQ=queue.filter(t=>effectiveIsVA?(t.VAEmail&&t.VAEmail.toLowerCase()===effectiveEmail):true);
+  const myTm=timers.filter(t=>effectiveIsVA?t.VAEmail.toLowerCase()===effectiveEmail:true);
   const outVAs=data?data.vas.filter(v=>getVAStatus(v)==="Out"):[];
   // Guest computed
   const guestVAEmails=isGuest&&myGuest?.VAEmails?myGuest.VAEmails.split(",").map(e=>e.trim().toLowerCase()).filter(Boolean):[];
@@ -1307,21 +1316,21 @@ function App(){
   // TABS
   // ============================================================
   const TABS=[];
-  const mrPendingCount=data?data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(isAdmin||a.PMEmail?.toLowerCase()===myEmail||a.PMEmail?.toLowerCase()===CONFIG.brandyEmail)).length:0;
-  const myMrCount=data?data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&a.VAEmail?.toLowerCase()===myEmail).length:0;
+  const mrPendingCount=data?data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(effectiveIsAdmin||a.PMEmail?.toLowerCase()===effectiveEmail||a.PMEmail?.toLowerCase()===CONFIG.brandyEmail)).length:0;
+  const myMrCount=data?data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&a.VAEmail?.toLowerCase()===effectiveEmail).length:0;
   if(isGuest){
     TABS.push({n:"Dashboard",k:"gdash"});
     TABS.push({n:`Active${timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase())).length?` (${timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase())).length})`:""}`,k:"gactive"});
     TABS.push({n:"History",k:"history"});
     TABS.push({n:"Scorecard",k:"score"});
   } else {
-    if(isMgr)TABS.push({n:"Dashboard",k:isAdmin?"dash":"mdash"});
-    if(isVA)TABS.push({n:`My Tasks${myQ.length?` (${myQ.length})`:""}`,k:"tasks"});
-    if(isAdmin)TABS.push({n:`All Tasks${queue.length?` (${queue.length})`:""}`,k:"alltasks"});
-    if(isVA||isAdmin)TABS.push({n:`Active${(isAdmin?timers.length:myTm.length)?` (${isAdmin?timers.length:myTm.length})`:""}`,k:"active"});
-    if(isMgr||isAdmin)TABS.push({n:`Mgr Review${mrPendingCount?` (${mrPendingCount})`:""}`,k:"mgrreview"});
-    if(isVA)TABS.push({n:myMrCount>0?`My Requests (${myMrCount})`:"My Requests",k:"myreview"});
-    if(role==="manager"||isAdmin)TABS.push({n:`My Properties${mgrProps.length?` (${mgrProps.length})`:isAdmin?" (All)":""}`,k:"mprops"});
+    if(effectiveIsMgr)TABS.push({n:"Dashboard",k:effectiveIsAdmin?"dash":"mdash"});
+    if(effectiveIsVA)TABS.push({n:`My Tasks${myQ.length?` (${myQ.length})`:""}`  ,k:"tasks"});
+    if(effectiveIsAdmin)TABS.push({n:`All Tasks${queue.length?` (${queue.length})`:""}`  ,k:"alltasks"});
+    if(effectiveIsVA||effectiveIsAdmin)TABS.push({n:`Active${(effectiveIsAdmin?timers.length:myTm.length)?` (${effectiveIsAdmin?timers.length:myTm.length})`:""}`  ,k:"active"});
+    if(effectiveIsMgr||effectiveIsAdmin)TABS.push({n:`Mgr Review${mrPendingCount?` (${mrPendingCount})`:""}`  ,k:"mgrreview"});
+    if(effectiveIsVA)TABS.push({n:myMrCount>0?`My Requests (${myMrCount})`:"My Requests",k:"myreview"});
+    if(effectiveRole==="manager"||effectiveIsAdmin)TABS.push({n:`My Properties${mgrProps.length?` (${mgrProps.length})`:effectiveIsAdmin?" (All)":""}`,k:"mprops"});
     TABS.push({n:"History",k:"history"});
     TABS.push({n:"Scorecard",k:"score"});
     if(isAdmin)TABS.push({n:"Admin",k:"admin"});
@@ -1349,27 +1358,46 @@ function App(){
         </div>
         <div style={S.headerUser}>
           <div style={{fontWeight:600}}>{isGuest?myGuest?.GuestName:acct.name||myEmail}</div>
-          <div style={{fontSize:11,color:isGuest?C.purple:C.gold500,textTransform:"uppercase"}}>{isGuest?`Guest${myGuest?.Company?` · ${myGuest.Company}`:""}${guestVAs?` · ${guestVAs.length} VAs`:""}`:role+( role==="manager"?` · ${mgrProps.length} properties`:"")}</div>
+          <div style={{fontSize:11,color:isGuest?C.purple:viewAs?C.warning:C.gold500,textTransform:"uppercase"}}>{isGuest?`Guest${myGuest?.Company?` · ${myGuest.Company}`:""}${guestVAs?` · ${guestVAs.length} VAs`:""}`:viewAs?`👁 ${viewAs.name} (${viewAs.role})`:role+(role==="manager"?` · ${mgrProps.length} properties`:"")}</div>
           <div style={{display:"flex",gap:4,justifyContent:"flex-end",marginTop:2}}>
             {isGuest?<Badge type="purple">Read-Only</Badge>:<>{timers.length>0&&<Badge type="success">{timers.length} timing</Badge>}{covQ.length>0&&<Badge type="warning">{covQ.length} coverage</Badge>}{outVAs.length>0&&<Badge type="error">{outVAs.length} out</Badge>}</>}
           </div>
+          {isAdmin&&data&&<div style={{marginTop:5}}>
+            <select style={{fontSize:11,background:viewAs?"rgba(212,150,10,0.15)":C.headerHover,color:viewAs?C.warning:C.teal100,border:`1px solid ${viewAs?C.warning:C.teal600}`,borderRadius:4,padding:"3px 8px",cursor:"pointer",fontFamily:font,maxWidth:180}} value={viewAs?viewAs.email:""} onChange={e=>{
+              const v=e.target.value;
+              if(!v){setViewAs(null);setTab(0);return;}
+              const emp=data.employees.find(x=>x.Email?.toLowerCase()===v);
+              if(!emp)return;
+              const r=detectRole(emp);
+              setViewAs({email:emp.Email.toLowerCase(),name:emp.Name,role:r});
+              setTab(0);
+            }}>
+              <option value="">View as...</option>
+              <optgroup label="Virtual Assistants">{data.vas.map(v=><option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}</option>)}</optgroup>
+              <optgroup label="Managers">{data.pms.map(p=><option key={p.Email} value={p.Email.toLowerCase()}>{p.Name}</option>)}</optgroup>
+            </select>
+          </div>}
         </div>
       </div>
       <div style={S.tabBar}>{TABS.map((t,i)=><button key={t.k} style={S.tab(tab===i)} onClick={()=>setTab(i)}>{t.n}</button>)}</div>
+      {viewAs&&<div style={{background:"rgba(212,150,10,0.12)",borderBottom:`2px solid ${C.warning}`,padding:"6px 20px",fontSize:12,fontWeight:600,color:C.warning,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+        <span>{"\u{1F441}\uFE0F"} Preview mode: viewing as <strong>{viewAs.name}</strong> ({viewAs.role}). Changes you make are real — they will affect actual data.</span>
+        <button style={{...S.btnO(C.warning,C.warning),padding:"3px 10px",fontSize:11,minHeight:24}} onClick={()=>{setViewAs(null);setTab(0);}}>Exit Preview</button>
+      </div>}
       {flash&&<div style={{background:C.gold50,borderBottom:`1px solid ${C.gold500}`,padding:"8px 20px",fontSize:13,fontWeight:600,color:C.gold700,textAlign:"center"}}>{flash}</div>}
       <div style={S.content}>
         {ck==="gdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null} filterVAs={guestVAs} isGuest={true}/>}
         {ck==="gactive"&&<ActiveView timers={timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase()))} tick={tick} isMgr={true} readOnly={true} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
-        {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
-        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onUnclaimTask={unclaimTask} onRequestHelp={requestHelp} onUnblockTask={unblockTask} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
+        {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={effectiveEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
+        {ck==="tasks"&&<MyTasksView data={data} role={effectiveRole} myEmail={effectiveEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onUnclaimTask={unclaimTask} onRequestHelp={requestHelp} onUnblockTask={unblockTask} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
         {ck==="alltasks"&&<AllTasksView data={data} queue={queue} covQ={covQ} timers={timers} onStartTimer={startTimer} onDeleteTask={deleteTask} onAddTask={addTask} config={data?.config}/>}
-        {ck==="mgrreview"&&<ManagerReviewTab data={data} myEmail={myEmail} isAdmin={isAdmin} onComplete={completeManagerReview}/>}
-        {ck==="myreview"&&<MyReviewTab data={data} myEmail={myEmail} onComplete={completeManagerReview} onAdd={addManagerReview} myProps={myProps}/>}
+        {ck==="mgrreview"&&<ManagerReviewTab data={data} myEmail={effectiveEmail} isAdmin={effectiveIsAdmin} onComplete={completeManagerReview}/>}
+        {ck==="myreview"&&<MyReviewTab data={data} myEmail={effectiveEmail} onComplete={completeManagerReview} onAdd={addManagerReview} myProps={myProps}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onBackdate={backdateFinish}/>}
-        {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} onCompleteManagerReview={completeManagerReview}/>}
-        {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} onUpdateDuration={updateDuration} guestVAEmails={guestVAEmails}/>}
-        {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs} shift={shift} tick={tick}/>}
+        {ck==="mprops"&&<ManagerPropsView data={data} myEmail={effectiveEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} onCompleteManagerReview={completeManagerReview}/>}
+        {ck==="history"&&<HistoryView data={data} role={effectiveRole} myEmail={effectiveEmail} isMgr={effectiveIsMgr} mgrProps={mgrProps} onUpdateDuration={updateDuration} guestVAEmails={guestVAEmails}/>}
+        {ck==="score"&&<ScorecardView data={data} role={effectiveRole} myEmail={effectiveEmail} isMgr={effectiveIsMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs} shift={shift} tick={tick}/>}
         {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks} onAdminClockIn={adminClockIn} onAddBackdatedShift={addBackdatedShift} onClosePastDays={closePastDays} onConfirmClosePastDays={confirmClosePastDays} onResolveBlocked={resolveBlocked}/>}
       <div style={{background:"#0f2229",borderTop:"2px solid #CDA04B",padding:"10px 20px",textAlign:"center",marginTop:20}}>
         <div style={{fontSize:11,color:"#8aabb5",letterSpacing:"0.04em"}}>
