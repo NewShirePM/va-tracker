@@ -1327,12 +1327,13 @@ function App(){
     if(effectiveIsMgr)TABS.push({n:"Dashboard",k:effectiveIsAdmin?"dash":"mdash"});
     if(effectiveIsVA)TABS.push({n:`My Tasks${myQ.length?` (${myQ.length})`:""}`  ,k:"tasks"});
     if(effectiveIsAdmin)TABS.push({n:`All Tasks${queue.length?` (${queue.length})`:""}`  ,k:"alltasks"});
-    if(effectiveIsVA||effectiveIsAdmin)TABS.push({n:`Active${(effectiveIsAdmin?timers.length:myTm.length)?` (${effectiveIsAdmin?timers.length:myTm.length})`:""}`  ,k:"active"});
+    if(effectiveIsAdmin)TABS.push({n:`Active${timers.length?` (${timers.length})`:""}`  ,k:"active"});
     if(effectiveIsMgr||effectiveIsAdmin)TABS.push({n:`Mgr Review${mrPendingCount?` (${mrPendingCount})`:""}`  ,k:"mgrreview"});
     if(effectiveIsVA)TABS.push({n:myMrCount>0?`My Requests (${myMrCount})`:"My Requests",k:"myreview"});
     if(effectiveRole==="manager"||effectiveIsAdmin)TABS.push({n:`My Properties${mgrProps.length?` (${mgrProps.length})`:effectiveIsAdmin?" (All)":""}`,k:"mprops"});
-    TABS.push({n:"History",k:"history"});
-    TABS.push({n:"Scorecard",k:"score"});
+    if(effectiveIsVA)TABS.push({n:"Scorecard",k:"score"});
+    if(effectiveIsAdmin)TABS.push({n:"History",k:"history"});
+    if(effectiveIsAdmin)TABS.push({n:"Scorecard",k:"score"});
     if(isAdmin)TABS.push({n:"Admin",k:"admin"});
   }
   const ck=TABS[tab]?.k||TABS[0]?.k;
@@ -1395,7 +1396,7 @@ function App(){
         {ck==="mgrreview"&&<ManagerReviewTab data={data} myEmail={effectiveEmail} isAdmin={effectiveIsAdmin} onComplete={completeManagerReview}/>}
         {ck==="myreview"&&<MyReviewTab data={data} myEmail={effectiveEmail} onComplete={completeManagerReview} onAdd={addManagerReview} myProps={myProps}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onBackdate={backdateFinish}/>}
-        {ck==="mprops"&&<ManagerPropsView data={data} myEmail={effectiveEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} onCompleteManagerReview={completeManagerReview}/>}
+        {ck==="mprops"&&<ManagerPropsView data={data} myEmail={effectiveEmail} myEmp={myEmp} mgrProps={effectiveIsAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={effectiveIsAdmin} onCompleteManagerReview={completeManagerReview}/>}
         {ck==="history"&&<HistoryView data={data} role={effectiveRole} myEmail={effectiveEmail} isMgr={effectiveIsMgr} mgrProps={mgrProps} onUpdateDuration={updateDuration} guestVAEmails={guestVAEmails}/>}
         {ck==="score"&&<ScorecardView data={data} role={effectiveRole} myEmail={effectiveEmail} isMgr={effectiveIsMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs} shift={shift} tick={tick}/>}
         {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks} onAdminClockIn={adminClockIn} onAddBackdatedShift={addBackdatedShift} onClosePastDays={closePastDays} onConfirmClosePastDays={confirmClosePastDays} onResolveBlocked={resolveBlocked}/>}
