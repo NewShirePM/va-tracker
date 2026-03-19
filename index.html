@@ -35,7 +35,19 @@ const CONFIG = {
   tenantId: "33575d04-ca7b-4396-8011-9eaea4030b46",
   siteId: "vanrockre.sharepoint.com,a02c1cd8-9f1f-4827-8286-7b6b7ce74232,01202419-6625-4499-b0d5-8ceb1cffdba3",
   appName: "VA PRODUCTIVITY TRACKER",
+  brandyEmail: "bturner@newshirepm.com",
+  brandyName: "Brandy Turner",
+  // US Federal Holidays — update annually. Format: "MM-DD"
+  holidays: ["01-01","01-20","02-17","05-26","06-19","07-04","09-01","11-27","11-28","12-25"],
 };
+
+function isWorkday(dateStr){
+  const d=new Date(dateStr+"T12:00:00");
+  const dow=d.getDay(); // 0=Sun, 6=Sat
+  if(dow===0||dow===6)return false;
+  const md=String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+  return!CONFIG.holidays.includes(md);
+}
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE = `${GRAPH}/sites/${CONFIG.siteId}`;
 const SCOPES = ["Sites.ReadWrite.All", "User.Read", "User.Invite.All", "Mail.Send"];
@@ -222,6 +234,9 @@ async function gPostActivity(token,fields){
   }
 }
 
+// Write lock — prevents duplicate task generation on concurrent buildQueue calls
+let _taskGenLock=false;
+
 // Cache failed list names so we don't retry on every poll
 const _listCache={newHiresName:null,newHiresFailed:false,guestsFailed:false};
 
@@ -284,6 +299,9 @@ function useMsal(){
 // ============================================================
 // MAIN APP
 // ============================================================
+// Module-level ref so BlockModal can call addManagerReview without prop drilling
+let _addMgrReviewRef=null;
+
 function App(){
   const{acct,token,login,refresh,err:authErr}=useMsal();
   const[tab,setTab]=useState(0);
@@ -299,7 +317,7 @@ function App(){
   useEffect(()=>{timersRef.current=timers;},[timers]);
   const[shift,setShift]=useState(()=>{
     try{
-      const saved=sessionStorage.getItem("va_shift_"+(window._vatEmail||""));
+      const saved=localStorage.getItem("va_shift_"+(window._vatEmail||""));
       return saved?JSON.parse(saved):null;
     }catch(e){return null;}
   });
@@ -340,7 +358,7 @@ function App(){
   useEffect(()=>{
     if(!myEmail)return;
     try{
-      const saved=sessionStorage.getItem("va_shift_"+myEmail);
+      const saved=localStorage.getItem("va_shift_"+myEmail);
       if(saved&&!shift){const s=JSON.parse(saved);setShift(s);console.log("[VT] Restored shift from session",s.ClockIn);}
     }catch(e){}
   },[myEmail]);
@@ -356,6 +374,12 @@ function App(){
     console.log("[VT] MSAL user:",email);
     window._vatEmail=email;
     setMyEmail(email);setLoading(true);
+    // Re-read shift from localStorage now that we have the actual email
+    try{
+      const shiftKey="va_shift_"+email;
+      const saved=localStorage.getItem(shiftKey);
+      if(saved){const s=JSON.parse(saved);if(s&&s.ClockIn)setShift(s);}
+    }catch(e){}
     loadAll(token).then(d=>{
       setData(d);
       // Priority 1: check Employees
@@ -395,7 +419,7 @@ function App(){
           tm.push(liveTimer); // keep accumulated _pMs and _pS intact
         }else{
           // New restore (page load or first seen) — check sessionStorage for paused state
-          const pausedStore=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");
+          const pausedStore=JSON.parse(localStorage.getItem("va_paused_timers")||"{}");
           const pausedData=pausedStore[a.id]||pausedStore[t._localId];
           const timerTask={
             ...t,
@@ -413,6 +437,12 @@ function App(){
     // 2. Generate recurring daily/weekly tasks that don't already exist
     if(d.config.recurringTasks){
       const td=today();
+      // Skip task generation on weekends and holidays
+      if(!isWorkday(td)){
+        setQueue(q);setCovQ(cv);
+        console.log("[VT] Skipping task generation — weekend or holiday:",td);
+        return;
+      }
       const todayDate=new Date(td);
       const todayDow=todayDate.getDay(); // 0=Sun,1=Mon,...6=Sat
       // Check what's already in SharePoint for today (any status)
@@ -456,18 +486,46 @@ function App(){
       // Set base queue state FIRST, then background-save new tasks and append
       setQueue(q);setCovQ(cv);
 
+      // Auto-close yesterday's unfinished recurring tasks before creating today's
       if(toSave.length>0){
         (async()=>{
           try{
             const tk=await gT();
-            for(const task of toSave){
+            const yd=new Date();yd.setDate(yd.getDate()-1);const yds=yd.toISOString().slice(0,10);
+            const stale=d.activities.filter(a=>
+              a.ActivityType==="Task"&&
+              (a.Status==="Queued"||a.Status==="In Progress")&&
+              actDate(a)&&actDate(a).slice(0,10)===yds&&
+              a.Source==="Daily"
+            );
+            for(const s of stale){
+              try{await gPatch(tk,iUrl("VA_Activity",s.id),{Status:"Incomplete",Notes:"Auto-closed: not completed"});}catch(e){}
+            }
+            if(stale.length)console.log(`[VT] Auto-closed ${stale.length} stale tasks from ${yds}`);
+          }catch(e){console.warn("[VT] Auto-close error:",e);}
+        })();
+      }
+
+      if(toSave.length>0){
+        (async()=>{
+          if(_taskGenLock){console.log("[VT] Task gen locked — skipping");return;}
+          _taskGenLock=true;
+          try{
+            const tk=await gT();
+            // Double-check SP one more time to guard against race on fast reloads
+            const freshToday=await gAll(tk,`${lUrl("VA_Activity")}?expand=fields&$top=200&$filter=fields/ActivityDate ge '${td}'`).catch(()=>[]);
+            const freshTitles=new Set(freshToday.map(a=>`${a.fields?.VAEmail?.toLowerCase()}|${a.fields?.Title}|${a.fields?.PropertyId||""}`));
+            const dedupedSave=toSave.filter(t=>!freshTitles.has(`${t.VAEmail?.toLowerCase()}|${t.Title}|${t.PropertyId||""}`));
+            if(!dedupedSave.length){console.log("[VT] All tasks already exist, skipping");return;}
+            for(const task of dedupedSave){
               const res=await gPostActivity(tk,actFields(task));
               const saved={...task,_localId:res.id,_spId:res.id,id:res.id};
               if(task.Source==="Coverage"){setCovQ(p=>[...p,saved]);}
               else{setQueue(p=>[...p,saved]);}
             }
-            console.log(`[VT] Generated ${toSave.length} daily tasks`);
+            console.log(`[VT] Generated ${dedupedSave.length} daily tasks`);
           }catch(e){console.error("[VT] Daily task generation error:",e);}
+          finally{_taskGenLock=false;}
         })();
       }
     }else{
@@ -566,6 +624,19 @@ function App(){
     }catch(e){fl("Error: "+e.message);}
   }
 
+  // ── Unblock task ──
+  async function unblockTask(task){
+    try{
+      const tk=await gT();
+      await gPatch(tk,iUrl("VA_Activity",task._spId||task.id),{Status:"Queued",Notes:""});
+      // Move from wherever it is back to queue
+      setQueue(p=>[{...task,Status:"Queued",Notes:""},
+        ...p.filter(t=>t._localId!==task._localId)]);
+      fl(`"${task.Title}" unblocked — back in queue`);
+      await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+
   // ── Timer actions ──
   async function startTimer(task){
     const now=new Date().toISOString();
@@ -589,9 +660,9 @@ function App(){
       if(t._localId!==id)return t;
       const updated={...t,_pS:Date.now()};
       try{
-        const paused=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");
+        const paused=JSON.parse(localStorage.getItem("va_paused_timers")||"{}");
         paused[id]={pausedAt:Date.now(),pMs:t._pMs||0};
-        sessionStorage.setItem("va_paused_timers",JSON.stringify(paused));
+        localStorage.setItem("va_paused_timers",JSON.stringify(paused));
       }catch(e){}
       return updated;
     }));
@@ -599,7 +670,7 @@ function App(){
   function resumeTimer(id){
     setTimers(p=>p.map(t=>{
       if(t._localId!==id||!t._pS)return t;
-      try{const paused=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");delete paused[id];sessionStorage.setItem("va_paused_timers",JSON.stringify(paused));}catch(e){}
+      try{const paused=JSON.parse(localStorage.getItem("va_paused_timers")||"{}");delete paused[id];localStorage.setItem("va_paused_timers",JSON.stringify(paused));}catch(e){}
       return{...t,_pMs:(t._pMs||0)+(Date.now()-t._pS),_pS:null};
     }));
   }
@@ -614,7 +685,7 @@ function App(){
       if(t._spId){await gPatch(tk,iUrl("VA_Activity",t._spId),fields);}
       else{await saveTask({...t,...fields});}
       setTimers(p=>p.filter(x=>x._localId!==id));
-      try{const paused=JSON.parse(sessionStorage.getItem("va_paused_timers")||"{}");delete paused[id];sessionStorage.setItem("va_paused_timers",JSON.stringify(paused));}catch(e){}
+      try{const paused=JSON.parse(localStorage.getItem("va_paused_timers")||"{}");delete paused[id];localStorage.setItem("va_paused_timers",JSON.stringify(paused));}catch(e){}
       // If this was a group timer, also finish all remaining queued sub-tasks
       if(t.GroupId){await finishGroupTimer(t.GroupId,status,notes,rawMs,pMs);}
       else{fl(status==="Completed"?"Task completed!":"Task: "+status);await reload();}
@@ -648,7 +719,7 @@ function App(){
     const now=new Date().toISOString();
     const s={ClockIn:now,Breaks:[],_ob:false,_bs:null,_spId:null};
     setShift(s);
-    try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}
+    try{localStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}
     fl("Clocked in!");
     // Write open shift record to SharePoint immediately so dashboard sees it
     try{
@@ -661,18 +732,18 @@ function App(){
       });
       const spId=res.id;
       setShift(p=>p?{...p,_spId:spId}:p);
-      try{const saved=JSON.parse(sessionStorage.getItem("va_shift_"+myEmail)||"{}");sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify({...saved,_spId:spId}));}catch(e){}
+      try{const saved=JSON.parse(localStorage.getItem("va_shift_"+myEmail)||"{}");localStorage.setItem("va_shift_"+myEmail,JSON.stringify({...saved,_spId:spId}));}catch(e){}
       console.log("[VT] Shift record created:",spId);
     }catch(e){console.warn("[VT] Shift SP write failed:",e);}
   }
   async function startBreak(){
     const now=new Date().toISOString();
-    setShift(p=>{if(!p)return p;const s={...p,_ob:true,_bs:now};try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});
+    setShift(p=>{if(!p)return p;const s={...p,_ob:true,_bs:now};try{localStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});
     if(shift?._spId){try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",shift._spId),{Title:`${myEmp?.Name||myEmail}-${today()}-Break`});}catch(e){console.warn("[VT] Break patch:",e);}}
   }
   async function endBreak(){
     const now=new Date().toISOString();
-    setShift(p=>{if(!p||!p._bs)return p;const s={...p,_ob:false,Breaks:[...p.Breaks,{s:p._bs,e:now}],_bs:null};try{sessionStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});
+    setShift(p=>{if(!p||!p._bs)return p;const s={...p,_ob:false,Breaks:[...p.Breaks,{s:p._bs,e:now}],_bs:null};try{localStorage.setItem("va_shift_"+myEmail,JSON.stringify(s));}catch(e){}return s;});
     if(shift?._spId){try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",shift._spId),{Title:`${myEmp?.Name||myEmail}-${today()}-Open`});}catch(e){console.warn("[VT] EndBreak patch:",e);}}
   }
   async function clockOut(){
@@ -691,7 +762,7 @@ function App(){
         // Fallback: no SP record exists yet (old session), create one
         await gPost(tk,lUrl("VA_Activity"),{...fields,ActivityType:"Shift",VAEmail:myEmail,VAName:myEmp?.Name||myEmail,ActivityDate:shift.ClockIn,StartTime:shift.ClockIn});
       }
-      setShift(null);try{sessionStorage.removeItem("va_shift_"+myEmail);}catch(e){}fl("Clocked out!");await reload();
+      setShift(null);try{localStorage.removeItem("va_shift_"+myEmail);}catch(e){}fl("Clocked out!");await reload();
     }catch(e){fl("Error: "+e.message);}
   }
 
@@ -1009,13 +1080,17 @@ function App(){
 
   // ── Manager Review Tasks ──
   async function addManagerReview(item){
+    _addMgrReviewRef=addManagerReview; // keep ref fresh
     try{
       const tk=await gT();
+      // General (no property) always routes to Brandy
+      const pmEmail=item.propertyId?item.pmEmail:CONFIG.brandyEmail;
+      const pmName=item.propertyId?item.pmName:CONFIG.brandyName;
       const res=await gPost(tk,lUrl("VA_Activity"),{
         Title:item.description,
         ActivityType:"ManagerReview",
         VAEmail:myEmail,VAName:myEmp?.Name||myEmail,
-        PMEmail:item.pmEmail,PMName:item.pmName,
+        PMEmail:pmEmail,PMName:pmName,
         PropertyId:item.propertyId||"",PropertyName:item.propertyName||"General",
         Category:item.category,
         Notes:item.residentName||"",
@@ -1023,9 +1098,10 @@ function App(){
         ActivityDate:new Date().toISOString(),
         StartTime:new Date().toISOString()
       });
+      const emailItem={...item,pmEmail,pmName};
       fl(`Review request sent to ${item.pmName}`);
       // Send email notification via Graph
-      try{await sendReviewEmail(tk,item,myEmp?.Name||myEmail);}
+      try{await sendReviewEmail(tk,emailItem,myEmp?.Name||myEmail);}
       catch(e){console.warn("[VT] Email failed:",e.message);}
       await reload();
     }catch(e){fl("Error: "+e.message);}
@@ -1076,7 +1152,8 @@ function App(){
       body:JSON.stringify({message:{
         subject,
         body:{contentType:"HTML",content:body},
-        toRecipients:[{emailAddress:{address:item.pmEmail,name:item.pmName}}]
+        toRecipients:[{emailAddress:{address:item.pmEmail,name:item.pmName}}],
+        ccRecipients:item.pmEmail.toLowerCase()!==CONFIG.brandyEmail?[{emailAddress:{address:CONFIG.brandyEmail,name:CONFIG.brandyName}}]:[]
       },saveToSentItems:false})
     });
   }
@@ -1230,6 +1307,8 @@ function App(){
   // TABS
   // ============================================================
   const TABS=[];
+  const mrPendingCount=data?data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(isAdmin||a.PMEmail?.toLowerCase()===myEmail||a.PMEmail?.toLowerCase()===CONFIG.brandyEmail)).length:0;
+  const myMrCount=data?data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&a.VAEmail?.toLowerCase()===myEmail).length:0;
   if(isGuest){
     TABS.push({n:"Dashboard",k:"gdash"});
     TABS.push({n:`Active${timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase())).length?` (${timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase())).length})`:""}`,k:"gactive"});
@@ -1237,8 +1316,11 @@ function App(){
     TABS.push({n:"Scorecard",k:"score"});
   } else {
     if(isMgr)TABS.push({n:"Dashboard",k:isAdmin?"dash":"mdash"});
-    if(isVA||isAdmin)TABS.push({n:`My Tasks${myQ.length?` (${myQ.length})`:""}`,k:"tasks"});
+    if(isVA)TABS.push({n:`My Tasks${myQ.length?` (${myQ.length})`:""}`,k:"tasks"});
+    if(isAdmin)TABS.push({n:`All Tasks${queue.length?` (${queue.length})`:""}`,k:"alltasks"});
     if(isVA||isAdmin)TABS.push({n:`Active${(isAdmin?timers.length:myTm.length)?` (${isAdmin?timers.length:myTm.length})`:""}`,k:"active"});
+    if(isMgr||isAdmin)TABS.push({n:`Mgr Review${mrPendingCount?` (${mrPendingCount})`:""}`,k:"mgrreview"});
+    if(isVA)TABS.push({n:myMrCount>0?`My Requests (${myMrCount})`:"My Requests",k:"myreview"});
     if(role==="manager"||isAdmin)TABS.push({n:`My Properties${mgrProps.length?` (${mgrProps.length})`:isAdmin?" (All)":""}`,k:"mprops"});
     TABS.push({n:"History",k:"history"});
     TABS.push({n:"Scorecard",k:"score"});
@@ -1280,7 +1362,10 @@ function App(){
         {ck==="gactive"&&<ActiveView timers={timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase()))} tick={tick} isMgr={true} readOnly={true} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
         {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
-        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onUnclaimTask={unclaimTask} onRequestHelp={requestHelp} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} onAddManagerReview={addManagerReview} onCompleteManagerReview={completeManagerReview} config={data?.config}/>}
+        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onUnclaimTask={unclaimTask} onRequestHelp={requestHelp} onUnblockTask={unblockTask} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
+        {ck==="alltasks"&&<AllTasksView data={data} queue={queue} covQ={covQ} timers={timers} onStartTimer={startTimer} onDeleteTask={deleteTask} onAddTask={addTask} config={data?.config}/>}
+        {ck==="mgrreview"&&<ManagerReviewTab data={data} myEmail={myEmail} isAdmin={isAdmin} onComplete={completeManagerReview}/>}
+        {ck==="myreview"&&<MyReviewTab data={data} myEmail={myEmail} onComplete={completeManagerReview} onAdd={addManagerReview} myProps={myProps}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onBackdate={backdateFinish}/>}
         {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} onCompleteManagerReview={completeManagerReview}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} onUpdateDuration={updateDuration} guestVAEmails={guestVAEmails}/>}
@@ -1347,7 +1432,7 @@ function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,se
         {!filterProps&&!isGuest&&<KPI label="Utilization" value={`${util}%`} color={util>=75?C.success:util>=50?C.warning:shiftMin>0?C.error:C.teal700}/>}
         <KPI label="Blocked" value={blocked.length} color={blocked.length>0?C.error:C.success}/>
         {!isGuest&&<KPI label="Coverage" value={covQ.length} color={covQ.length>0?C.warning:C.success}/>}
-        {(()=>{const pendingReviews=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(!propIds||propIds.has(a.PropertyId)));return pendingReviews.length>0&&<KPI label="Mgr Review" value={pendingReviews.length} color={C.gold700} sub="pending"/>;})()}
+        {(()=>{const pendingReviews=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(!propIds||propIds.has(a.PropertyId)));return<KPI label="Mgr Review" value={pendingReviews.length} color={pendingReviews.length>0?C.gold700:C.success} sub="pending"/>;})()}
         {!filterProps&&!isGuest&&<KPI label="VAs Out" value={data.vas.filter(v=>getVAStatus(v)==="Out").length} color={data.vas.filter(v=>getVAStatus(v)==="Out").length>0?C.warning:C.teal700}/>}
       </div>
 
@@ -1462,6 +1547,8 @@ function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,se
         </div>
       </div>
     </div>
+  </div>
+  </div>
   );
 }
 
@@ -1537,9 +1624,10 @@ function ManagerReviewForm({data,myEmail,myVa,myProps,onSubmit,pendingReviews,on
           </div>
           <div style={{flex:1,minWidth:150}}><label style={S.label}>Property</label>
             <select style={S.select} value={mrProp} onChange={e=>setMrProp(e.target.value)}>
-              <option value="">General</option>
+              <option value="">General (Brandy only)</option>
               {(myProps||[]).map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}
             </select>
+            {!mrProp&&<div style={{fontSize:11,color:C.gold700,marginTop:3}}>⚠ General routes directly to Brandy — only use for tasks that are not property-specific</div>}
           </div>
         </div>
         {targetPm&&<div style={{fontSize:11,color:C.success,marginTop:4}}>→ Will notify: {targetPm.Name} ({targetPm.Email})</div>}
@@ -1562,9 +1650,130 @@ function ManagerReviewForm({data,myEmail,myVa,myProps,onSubmit,pendingReviews,on
 }
 
 // ============================================================
+// BLOCK MODAL — required reason + optional manager task
+// ============================================================
+function BlockModal({task,onConfirm,onCancel,data,myEmail,myEmp}){
+  const[reason,setReason]=useState("");
+  const[createMgr,setCreateMgr]=useState(false);
+  const[mgrCat,setMgrCat]=useState("Other");
+  const inputRef=useRef(null);
+  useEffect(()=>{if(inputRef.current)inputRef.current.focus();},[]);
+
+  function handleConfirm(){
+    if(!reason.trim())return;
+    onConfirm(reason.trim(),createMgr?mgrCat:null);
+  }
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:C.white,borderRadius:8,padding:24,maxWidth:440,width:"100%",boxShadow:"0 8px 32px rgba(0,0,0,0.2)"}}>
+        <div style={{fontSize:16,fontWeight:700,color:C.error,marginBottom:4}}>⚠ Block Task</div>
+        <div style={{fontSize:13,color:C.teal700,fontWeight:500,marginBottom:14}}>{task?.Title}</div>
+        <div style={{marginBottom:14}}>
+          <label style={{...S.label,color:C.error}}>Reason for blocking * <span style={{fontWeight:400,color:C.gray400}}>(required)</span></label>
+          <textarea ref={inputRef} style={{...S.input,minHeight:72,resize:"vertical",borderColor:reason.trim()?C.gray200:C.error}}
+            value={reason} onChange={e=>setReason(e.target.value)}
+            placeholder="Describe what is blocking this task..."/>
+          {!reason.trim()&&<div style={{fontSize:11,color:C.error,marginTop:3}}>A reason is required to block a task.</div>}
+        </div>
+        <label style={{display:"flex",alignItems:"flex-start",gap:8,padding:"10px 12px",background:C.gold50,border:`1px solid ${C.gold100}`,borderRadius:6,cursor:"pointer",marginBottom:14}}>
+          <input type="checkbox" checked={createMgr} onChange={e=>setCreateMgr(e.target.checked)} style={{marginTop:2,accentColor:C.gold700}}/>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:C.gold700}}>Create a Manager Review task to clear this block</div>
+            <div style={{fontSize:11,color:C.gray400,marginTop:1}}>Sends a notification to the PM so they can take action</div>
+          </div>
+        </label>
+        {createMgr&&<div style={{marginBottom:14}}>
+          <label style={S.label}>Review Category</label>
+          <select style={S.select} value={mgrCat} onChange={e=>setMgrCat(e.target.value)}>
+            {["Application Review","Property Question","Resident Communication","Other"].map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>}
+        <div style={{display:"flex",gap:8}}>
+          <button style={{...S.btn(C.error),flex:1,opacity:reason.trim()?1:0.4}} onClick={handleConfirm} disabled={!reason.trim()}>⚠ Block Task</button>
+          <button style={{...S.btnO(C.gray400,C.gray200),flex:1}} onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PROPERTY SECTION — collapsible group of tasks by property
+// ============================================================
+function PropertySection({propName,tasks,timers,defaultOpen,onStartTimer,onPause,onResume,onFinish,onCancel,onBlock,onUnblock,onDelete,onRequestHelp,onUnclaim,onCompleteSubTask,showVA,isMgr,tick,isAdm}){
+  const[open,setOpen]=useState(defaultOpen||false);
+  const pendingCount=tasks.filter(t=>t.Status!=="Completed"&&t.Status!=="Blocked").length;
+  const activeCount=timers?timers.filter(tm=>tasks.some(q=>q._localId===tm._localId||q._spId===tm._spId)).length:0;
+  const blockedCount=tasks.filter(t=>t.Status==="Blocked").length;
+  const totalDisplay=pendingCount+activeCount+blockedCount;
+  return(
+    <div style={{...S.card,padding:0,overflow:"hidden",marginBottom:10}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:C.teal50,cursor:"pointer",borderBottom:open?`1px solid ${C.teal100}`:"none"}} onClick={()=>setOpen(x=>!x)}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <span style={{fontSize:13,fontWeight:700,color:C.teal700}}>{propName==="General"?"\u{1F4C1} General":"\u{1F3E0} "+propName}</span>
+          <span style={{fontSize:11,color:C.gray400}}>{pendingCount} pending{blockedCount>0?` · ${blockedCount} blocked`:""}</span>
+          {activeCount>0&&<Badge type="success">{"\u23F1"} {activeCount} timing</Badge>}
+          {blockedCount>0&&<Badge type="error">{blockedCount} blocked</Badge>}
+        </div>
+        <span style={{fontSize:13,color:C.gray400}}>{open?"\u25B2":"\u25BC"}</span>
+      </div>
+      {open&&<div style={{padding:"4px 14px 10px"}}>
+        {tasks.map(t=>{
+          const liveTimer=timers?timers.find(x=>x._localId===t._localId||x._spId===t._spId):null;
+          if(liveTimer){
+            return(<InlineTimer key={t._localId} timer={liveTimer} tick={tick} isMgr={isMgr}
+              onPause={onPause} onResume={onResume} onFinish={onFinish} onCancel={onCancel} onBlock={onBlock}/>);
+          }
+          const isCovClaimed=t.CoverageForName&&!t.CoverageForEmail;
+          const isAssisted=t._assistedFor||t.Notes?.startsWith("Assisted by");
+          return(<div key={t._localId}>
+            {isAssisted&&<div style={{fontSize:11,color:C.info,fontWeight:600,marginBottom:2,paddingLeft:8}}>{"\u{1F91D}"} Assisting {t._assistedFor||""}</div>}
+            <TaskRow task={t} onStart={t.Status==="Blocked"?null:onStartTimer?()=>onStartTimer(t):null}
+              onDelete={isAdm?()=>onDelete(t):null} showVA={showVA} onComplete={onCompleteSubTask}
+              onUnclaim={(isCovClaimed||isAssisted)&&onUnclaim?()=>onUnclaim(t):null}
+              onRequestHelp={!isCovClaimed&&!isAssisted&&t.Status!=="Blocked"&&onRequestHelp?()=>onRequestHelp(t):null}
+              onUnblock={t.Status==="Blocked"&&onUnblock?()=>onUnblock(t):null}/>
+          </div>);
+        })}
+      </div>}
+    </div>
+  );
+}
+
+// ============================================================
+// INLINE TIMER — shows active timer controls within the task list
+// ============================================================
+function InlineTimer({timer:t,tick,isMgr,onPause,onResume,onFinish,onCancel,onBlock}){
+  const now=Date.now(),st=new Date(t.StartTime).getTime();
+  let pMs=t._pMs||0;const ip=!!t._pS;
+  if(ip)pMs+=(now-t._pS);
+  const el=ip?Math.floor((t._pS-st-(t._pMs||0))/1000):Math.floor((now-st-pMs)/1000);
+  return(
+    <div style={{background:ip?C.warningBg:C.successBg,border:`1px solid ${ip?C.warning:C.success}`,borderLeft:`3px solid ${ip?C.warning:C.success}`,borderRadius:4,padding:"8px 10px",margin:"4px 0"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+        <span style={{fontSize:14}}>{getIcon(t.icon,t.Category)}</span>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.teal700}}>{t.Title}</div>
+          <div style={{fontSize:11,color:C.gray400}}>{isMgr?t.VAName+" \u00B7 ":""}{t.PropertyName||"General"}</div>
+        </div>
+        <div style={{fontFamily:mono,fontSize:18,fontWeight:700,color:ip?C.warning:C.success,minWidth:60,textAlign:"right"}}>{fTm(el)}</div>
+      </div>
+      <div style={{display:"flex",gap:5,marginTop:8,flexWrap:"wrap"}}>
+        {ip?<button style={{...S.btn(C.success),...S.btnSm,flex:1}} onClick={()=>onResume(t._localId)}>{"\u25B6"} Resume</button>
+           :<button style={{...S.btnO(C.warning,C.warning),...S.btnSm,flex:1}} onClick={()=>onPause(t._localId)}>{"\u23F8"} Pause</button>}
+        <button style={{...S.btn(C.success),...S.btnSm,flex:1}} onClick={()=>{const n=prompt("Notes (optional):");const d=prompt("Date (YYYY-MM-DD, blank=today):",t.StartTime?.slice(0,10)||today());if(d===null)return;onFinish(t._localId,"Completed",n||"",(d.trim()&&d.trim()!==today())?d.trim():null);}}>{"\\u2713"} Done</button>
+        <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"5px 10px"}} title="Block task" onClick={()=>onBlock?onBlock(t._localId,t):(()=>{const n=prompt("Block reason (required):");if(n&&n.trim())onFinish(t._localId,"Blocked",n.trim());})()}>{"\\\\u26A0"}</button>
+        <button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm,padding:"5px 10px"}} onClick={()=>onCancel(t._localId)}>{"\u21A9"}</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // TASK ROW
 // ============================================================
-function TaskRow({task,onStart,onDelete,showVA,onComplete,compact,onUnclaim,onRequestHelp}){
+function TaskRow({task,onStart,onDelete,showVA,onComplete,compact,onUnclaim,onRequestHelp,onBlock,onUnblock}){
   return(<div style={{display:"flex",alignItems:"center",gap:8,padding:compact?"5px 0":"9px 0",borderBottom:`1px solid ${C.gray100}`}}>
     <span style={{fontSize:compact?13:16}}>{getIcon(task.icon,task.Category)}</span>
     <div style={{flex:1,minWidth:0}}>
@@ -1573,9 +1782,13 @@ function TaskRow({task,onStart,onDelete,showVA,onComplete,compact,onUnclaim,onRe
     </div>
     <div style={{display:"flex",gap:4,flexShrink:0,alignItems:"center"}}>
       {task.Status==="Completed"&&<span style={{fontSize:11,color:C.success,fontWeight:600}}>{"\u2713"} Done</span>}
-      {task.Status==="Blocked"&&<Badge type="error">Blocked</Badge>}
+      {task.Status==="Blocked"&&<div style={{display:"flex",alignItems:"center",gap:4}}>
+        <Badge type="error">Blocked</Badge>
+        {task.Notes&&<span style={{fontSize:11,color:C.error,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={task.Notes}>{task.Notes}</span>}
+        {onUnblock&&<button style={{...S.btn(C.success),...S.btnSm,fontSize:11}} onClick={()=>{if(window.confirm(`Unblock "${task.Title}"? It will return to your queue.`))onUnblock(task);}}>✓ Unblock</button>}
+      </div>}
       {task.Status!=="Completed"&&task.Status!=="Blocked"&&onComplete&&<button style={{...S.btnO(C.success,C.success),...S.btnSm,padding:"3px 8px",fontSize:11}} onClick={()=>onComplete(task,"Completed","")}>{"\u2713"}</button>}
-      {task.Status!=="Completed"&&task.Status!=="Blocked"&&onComplete&&<button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:11}} onClick={()=>{const n=prompt("What\'s blocking?");if(n!==null)onComplete(task,"Blocked",n);}}>{"\u26A0"}</button>}
+      {task.Status!=="Completed"&&task.Status!=="Blocked"&&onComplete&&<button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"3px 8px",fontSize:11}} title="Block task" onClick={()=>onBlock?onBlock(task._localId||task.id,task):onComplete&&(()=>{const n=prompt("What is blocking this task?");if(n?.trim())onComplete(task,"Blocked",n);})()}>{"\u26A0"}</button>}
       {onStart&&task.Status!=="Completed"&&task.Status!=="Blocked"&&<button style={{...S.btn(C.success),...S.btnSm}} onClick={onStart}>{"\u25B6"} Start</button>}
       {onRequestHelp&&task.Status!=="Completed"&&task.Status!=="Blocked"&&<button style={{...S.btnO(C.info,C.info),...S.btnSm,padding:"5px 8px",fontSize:11}} title="Ask another VA for help" onClick={()=>{if(window.confirm(`Request help from another VA on "${task.Title}"? It stays in your queue but others can claim a copy.`))onRequestHelp(task);}}>🤝 Help</button>}
       {onUnclaim&&task.Status!=="Completed"&&task.Status!=="Blocked"&&<button style={{...S.btnO(C.warning,C.warning),...S.btnSm,padding:"5px 8px",fontSize:11}} title="Return to coverage pool" onClick={()=>{if(window.confirm("Return this task to the coverage pool?"))onUnclaim(task);}}>↩ Unclaim</button>}
@@ -1667,96 +1880,89 @@ function groupTasks(tasks,allowFallback=false){
 // ============================================================
 // MY TASKS (VA view)
 // ============================================================
-function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onUnclaimTask,onRequestHelp,onAddTask,onDeleteTask,onCompleteSubTask,onAddManagerReview,onCompleteManagerReview,config}){
+function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onUnclaimTask,onRequestHelp,onUnblockTask,onAddTask,onDeleteTask,onCompleteSubTask,config}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
+  const[blockTarget,setBlockTarget]=useState(null); // {id, task}
   const isAdm=role==="admin";
   const myTasks=isAdm?queue:queue.filter(t=>t.VAEmail&&t.VAEmail.toLowerCase()===myEmail);
-  const daily=myTasks.filter(t=>t.Source==="Daily"||t.Source==="Weekly");
-  const assigned=myTasks.filter(t=>t.Source==="Assigned"||t.Source==="Coverage");
-  const adhoc=myTasks.filter(t=>t.Source==="Ad-Hoc");
-  // Catch-all: tasks that don't match any bucket (shouldn't happen, but show them)
-  const other=myTasks.filter(t=>!["Daily","Weekly","Assigned","Coverage","Ad-Hoc"].includes(t.Source));
-  const myActive=isAdm?timers.length:timers.filter(t=>t.VAEmail.toLowerCase()===myEmail).length;
+  const myTimers=isAdm?timers:timers.filter(t=>t.VAEmail&&t.VAEmail.toLowerCase()===myEmail);
   const cats=config?.categories||[];
   const portProps=data?data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===myEmail).map(p=>data.properties.find(pr=>pr.Title===p.PropertyId)).filter(Boolean):[];
-  let shE=0,bkE=0;
-  if(shift){const now=Date.now();let bMs=shift.Breaks.reduce((s,b)=>s+(new Date(b.e)-new Date(b.s)),0);if(shift._ob&&shift._bs)bMs+=(now-new Date(shift._bs).getTime());bkE=Math.floor(bMs/1000);shE=Math.floor((now-new Date(shift.ClockIn).getTime()-bMs)/1000);}
+  let shE=0;
+  if(shift){const now=Date.now();let bMs=shift.Breaks.reduce((s,b)=>s+(new Date(b.e)-new Date(b.s)),0);if(shift._ob&&shift._bs)bMs+=(now-new Date(shift._bs).getTime());shE=Math.floor((now-new Date(shift.ClockIn).getTime()-bMs)/1000);}
+
+  // Group all tasks+active timers+blocked tasks by property
+  const myBlocked=data?data.activities.filter(a=>
+    a.ActivityType==="Task"&&a.Status==="Blocked"&&
+    (isAdm||a.VAEmail?.toLowerCase()===myEmail)
+  ):[];
+  const allItems=[...myTasks];
+  // Add blocked tasks not already in queue
+  myBlocked.forEach(b=>{
+    if(!allItems.find(q=>q._localId===b.id||q._spId===b.id||q.id===b.id))
+      allItems.push({...b,_localId:b.id,_spId:b.id});
+  });
+  myTimers.forEach(t=>{if(!allItems.find(q=>q._localId===t._localId||q._spId===t._spId))allItems.push(t);});
+  const propGroups={};
+  allItems.forEach(t=>{const pn=t.PropertyName||"General";if(!propGroups[pn])propGroups[pn]=[];propGroups[pn].push(t);});
+  const sortedProps=["General",...Object.keys(propGroups).filter(p=>p!=="General").sort()].filter(p=>propGroups[p]);
 
   function handleAdd(){if(!fDesc||!fCat)return;const cat=cats.find(c=>c.id===fCat);const prop=fProp?data.properties.find(p=>p.Title===fProp):null;
     onAddTask({Title:fDesc,VAEmail:myEmail,VAName:myVa?.Name||myEmail,PropertyId:fProp||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Priority:fPri,Source:"Ad-Hoc"});
     setFDesc("");setFCat("");setFProp("");setFPri("Normal");setShowForm(false);}
 
   return(<div style={{maxWidth:700,margin:"0 auto"}}>
-    {/* Identity */}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-      <div><div style={{fontSize:18,fontWeight:700,color:C.teal700}}>{myVa?.Name||myEmail}</div><div style={{fontSize:12,color:C.gray400}}>{portProps.length} properties · {portProps.reduce((s,p)=>s+(p.Units||0),0)} units</div></div>
-      {myActive>0&&<Badge type="success">{myActive} timing</Badge>}
+      <div><div style={{fontSize:18,fontWeight:700,color:C.teal700}}>{myVa?.Name||myEmail}</div><div style={{fontSize:12,color:C.gray400}}>{portProps.length} properties</div></div>
+      {myTimers.length>0&&<Badge type="success">{myTimers.length} timing</Badge>}
     </div>
-    {/* Shift Clock */}
     <div style={{...S.card,borderLeft:`3px solid ${shift?(shift._ob?C.warning:C.success):C.info}`}}>
-      {!shift?(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u23F0"} Shift Clock</div><div style={{fontSize:12,color:C.gray400}}>Not clocked in</div></div><button style={S.btn(C.info)} onClick={onClockIn}>{"\u2600"} Clock In</button></div>
+      {!shift?(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>Shift Clock</div><div style={{fontSize:12,color:C.gray400}}>Not clocked in</div></div><button style={S.btn(C.info)} onClick={onClockIn}>Clock In</button></div>
       ):(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-          <div><div style={{fontSize:13,fontWeight:600,color:shift._ob?C.warning:C.success,textTransform:"uppercase"}}>{shift._ob?"\u2615 On Break":"\u23F0 Clocked In"}</div><div style={{fontSize:11,color:C.gray400}}>Since {fT(shift.ClockIn)} · {shift.Breaks.length+(shift._ob?1:0)} breaks</div></div>
-          <div style={{textAlign:"right"}}><div style={{fontSize:10,color:C.gray400,textTransform:"uppercase"}}>Working</div><div style={{fontSize:22,fontWeight:700,fontFamily:mono,color:shift._ob?C.warning:C.teal700}}>{fTm(shE)}</div></div></div>
+          <div><div style={{fontSize:13,fontWeight:600,color:shift._ob?C.warning:C.success,textTransform:"uppercase"}}>{shift._ob?"On Break":"Clocked In"}</div><div style={{fontSize:11,color:C.gray400}}>Since {fT(shift.ClockIn)}</div></div>
+          <div style={{textAlign:"right"}}><div style={{fontSize:22,fontWeight:700,fontFamily:mono,color:shift._ob?C.warning:C.teal700}}>{fTm(shE)}</div></div></div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-          {shift._ob?<button style={{...S.btn(C.success),flex:1}} onClick={onBreakEnd}>{"\u25B6"} End Break</button>:<button style={{...S.btnO(C.warning,C.warning),flex:1}} onClick={onBreakStart}>{"\u2615"} Break</button>}
-          <button style={{...S.btn(C.error),flex:1}} onClick={onClockOut}>{"\u{1F319}"} Clock Out</button>
+          {shift._ob?<button style={{...S.btn(C.success),flex:1}} onClick={onBreakEnd}>End Break</button>:<button style={{...S.btnO(C.warning,C.warning),flex:1}} onClick={onBreakStart}>Break</button>}
+          <button style={{...S.btn(C.error),flex:1}} onClick={onClockOut}>Clock Out</button>
         </div></div>)}
     </div>
-    {/* Coverage */}
     {covQ.length>0&&(<div style={{...S.card,borderLeft:`3px solid ${C.warning}`,background:C.warningBg}}>
-      <div style={{fontSize:15,fontWeight:600,color:C.warning,marginBottom:8}}>{"\u{1F6A8}"} Coverage Needed ({covQ.length})</div>
-      {covQ.map(t=>{
-        const isHelp=t.Notes?.includes("Help requested");
+      <div style={{fontSize:15,fontWeight:600,color:C.warning,marginBottom:8}}>Coverage Needed ({covQ.length})</div>
+      {covQ.map(t=>{const isHelp=t.Notes?.includes("Help requested");
         return(<div key={t._localId} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid rgba(212,150,10,0.1)"}}>
         <span>{catIcon[t.Category]||"\u{1F4C1}"}</span>
-        <div style={{flex:1}}>
-          <div style={{fontSize:13,fontWeight:500,color:C.teal700}}>{t.Title}</div>
-          <div style={{fontSize:11,color:C.gray400}}>{t.PropertyName} · {isHelp?`🤝 Help needed — ${t.CoverageForName} is requesting assistance`:`covering ${t.CoverageForName}`}</div>
-        </div>
-        <button style={{...S.btn(isHelp?C.info:C.warning,C.dark),...S.btnSm}} onClick={()=>onClaimCov(t._localId)}>{isHelp?"🤝 Help":"✋ Claim"}</button></div>);
+        <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500,color:C.teal700}}>{t.Title}</div>
+          <div style={{fontSize:11,color:C.gray400}}>{t.PropertyName} · {isHelp?"Help needed — "+t.CoverageForName+" is requesting assistance":"covering "+t.CoverageForName}</div></div>
+        <button style={{...S.btn(isHelp?C.info:C.warning,C.dark),...S.btnSm}} onClick={()=>onClaimCov(t._localId)}>{isHelp?"Help":"Claim"}</button></div>);
       })}
     </div>)}
-    {/* Daily */}
-    <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",...(daily.length?{paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:6}:{})}}><div style={{fontSize:15,fontWeight:600,color:C.teal700}}>{"\u{1F4CB}"} Daily Tasks</div><span style={{fontSize:12,color:C.gray400}}>{daily.length} left</span></div>
-      {!daily.length&&<p style={{color:C.gray400,fontSize:13,marginTop:10}}>All done!</p>}
-      {groupTasks(daily).map((item,i)=>item.type==="single"
-        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask} onRequestHelp={()=>onRequestHelp(item.task)}/>
-        :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
-      )}</div>
-    {/* Assigned */}
-    {assigned.length>0&&<div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
-      <div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Assigned & Coverage ({assigned.length})</div>
-      {groupTasks(assigned).map((item,i)=>{
-        const t=item.type==="single"?item.task:item.tasks[0];
-        const isCovClaimed=t.CoverageForName&&!t.CoverageForEmail; // claimed from coverage
-        const isAssisted=t._assistedFor||t.Notes?.startsWith("Assisted by");
-        return item.type==="single"
-          ?<div key={t._localId}>
-            {isAssisted&&<div style={{fontSize:11,color:C.info,fontWeight:600,marginBottom:2,paddingLeft:24}}>🤝 Assisting {t._assistedFor||""} — this task stays in their queue too</div>}
-            <TaskRow task={t} onStart={()=>onStartTimer(t)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask}
-              onUnclaim={(isCovClaimed||isAssisted)&&onUnclaimTask?()=>onUnclaimTask(t):null}
-              onRequestHelp={!isCovClaimed&&!isAssisted?()=>onRequestHelp(t):null}/>
-          </div>
-          :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>;
-      })}</div>}
-    {/* Ad-Hoc */}
-    {adhoc.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4DD}"} Extra ({adhoc.length})</div>{groupTasks(adhoc).map((item,i)=>item.type==="single"
-        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask} onRequestHelp={()=>onRequestHelp(item.task)}/>
-        :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
-      )}</div>}
-    {/* Catch-all for any other source types */}
-    {other.length>0&&<div style={S.card}><div style={{fontSize:15,fontWeight:600,color:C.teal700,marginBottom:6}}>{"\u{1F4CC}"} Other ({other.length})</div>{groupTasks(other).map((item,i)=>item.type==="single"
-        ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask} onRequestHelp={()=>onRequestHelp(item.task)}/>
-        :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
-      )}</div>}
-    {/* Manager Review */}
-    <ManagerReviewForm data={data} myEmail={myEmail} myVa={myVa} myProps={portProps} onSubmit={onAddManagerReview}
-      pendingReviews={data?.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.VAEmail?.toLowerCase()===myEmail&&(a.Status==="Pending"||(a.Status==="Completed"&&dAgo(actDate(a))<=7)))||[]}
-      onComplete={onCompleteManagerReview}/>
-
-    {/* Add Task */}
-    <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:14,fontWeight:600,color:C.teal700}}>➕ Add Task</div><button style={S.btnO(C.teal700,C.teal100)} onClick={()=>setShowForm(!showForm)}>{showForm?"Cancel":"New"}</button></div>
+    {sortedProps.map(pn=>(
+      <PropertySection key={pn} propName={pn} tasks={propGroups[pn]} timers={myTimers}
+        defaultOpen={false} onStartTimer={onStartTimer} onPause={onPause} onResume={onResume}
+        onFinish={onFinish} onCancel={onCancel} onBlock={(id,task)=>setBlockTarget({id,task})}
+        onUnblock={onUnblockTask} onDelete={onDeleteTask} onRequestHelp={onRequestHelp}
+        onUnclaim={onUnclaimTask} onCompleteSubTask={onCompleteSubTask}
+        showVA={isAdm} isMgr={isAdm} tick={tick} isAdm={isAdm}/>
+    ))}
+    {sortedProps.length===0&&<div style={{...S.card,textAlign:"center",padding:30,color:C.gray400}}>All done! No pending tasks.</div>}
+    {blockTarget&&<BlockModal task={blockTarget.task} data={data} myEmail={myEmail} myEmp={null}
+      onConfirm={(reason,mgrCat)=>{
+        onFinish(blockTarget.id,"Blocked",reason);
+        if(mgrCat){
+          const prop=data.properties.find(p=>p.Title===blockTarget.task.PropertyId);
+          const pm=prop?data.pms.find(p=>p.Email?.toLowerCase()===prop.PMEmail?.toLowerCase()):null||data.pms[0];
+          if(pm&&_addMgrReviewRef)_addMgrReviewRef({
+            category:mgrCat,propertyId:blockTarget.task.PropertyId||"",
+            propertyName:blockTarget.task.PropertyName||"General",
+            pmEmail:pm.Email,pmName:pm.Name,
+            residentName:"",
+            description:"Block clearance needed: "+blockTarget.task.Title+" — "+reason
+          });
+        }
+        setBlockTarget(null);
+      }}
+      onCancel={()=>setBlockTarget(null)}/>}
+    <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:14,fontWeight:600,color:C.teal700}}>Add Task</div><button style={S.btnO(C.teal700,C.teal100)} onClick={()=>setShowForm(!showForm)}>{showForm?"Cancel":"New"}</button></div>
       {showForm&&<div style={{marginTop:14}}>
         <div style={S.row}><div style={{flex:1,minWidth:130}}><label style={S.label}>Category *</label><select style={S.select} value={fCat} onChange={e=>setFCat(e.target.value)}><option value="">...</option>{sortCats(cats).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div style={{flex:1,minWidth:130}}><label style={S.label}>Property</label><select style={S.select} value={fProp} onChange={e=>setFProp(e.target.value)}><option value="">General</option>{portProps.map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}</select></div>
@@ -1766,6 +1972,8 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
       </div>}</div>
   </div>);
 }
+
+
 
 // ============================================================
 // ACTIVE VIEW
@@ -1798,7 +2006,7 @@ function ActiveView({timers:tms,tick,isMgr,readOnly,onPause,onResume,onFinish,on
           const useDate=(d.trim()&&d.trim()!==today())?d.trim():null;
           onFinish(t._localId,"Completed",n||"",useDate);
         }}>{"\u2713"} Done</button>
-        <button style={{...S.btnO(C.error,C.error),padding:"9px 12px"}} onClick={()=>{const n=prompt("What's blocking?");if(n)onFinish(t._localId,"Blocked",n);}}>{"\u26A0"}</button>
+        <button style={{...S.btnO(C.error,C.error),padding:"9px 12px"}} title="Block task" onClick={()=>onBlock?onBlock(t._localId,t):(()=>{const n=prompt("Block reason (required):");if(n&&n.trim())onFinish(t._localId,"Blocked",n.trim());})()}>{"\u26A0"}</button>
         <button style={{...S.btnO(C.gold600,C.gold100),padding:"9px 12px",fontWeight:600,fontSize:11}} title="Backdate complete" onClick={()=>{const h=prompt("Estimated hours spent on this task (e.g. 0.5, 1, 2.5):");if(!h||isNaN(parseFloat(h))||parseFloat(h)<=0)return;const n=prompt("Notes (optional):");onBackdate(t._localId,h,"Completed",n||"");}}>{"\u{1F4C5}"}</button>
         <button style={{...S.btnO(C.gray400,C.gray200),padding:"9px 12px"}} onClick={()=>onCancel(t._localId)}>{"\u21A9"}</button>
       </div>}</div>);})}</div>);
@@ -1871,47 +2079,8 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
       {selProp&&(()=>{const va=getVA(selProp);return va?<div style={{fontSize:12,color:C.success,marginTop:8}}>{"\u2192"} Routes to: {va.Name}{getVAStatus(va)==="Out"?` (\u26A0 currently OUT — will go to coverage)`:""}</div>:<div style={{fontSize:12,color:C.error,marginTop:8}}>{"\u26A0"} No VA assigned to this property</div>;})()}
     </div>
 
-    {/* Pending My Review */}
-    {(()=>{
-      const pending=data.activities.filter(a=>
-        a.ActivityType==="ManagerReview"&&
-        (a.Status==="Pending"||(a.Status==="Completed"&&dAgo(actDate(a))<=7))&&
-        (isAdmin||a.PMEmail?.toLowerCase()===myEmail)
-      ).sort((a,b)=>new Date(b.ActivityDate||0)-new Date(a.ActivityDate||0));
-      if(!pending.length)return null;
-      return(
-        <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
-          {(()=>{const pendingOnly=pending.filter(x=>x.Status==="Pending");const doneRecent=pending.filter(x=>x.Status==="Completed");return(
-            <div style={{fontSize:16,fontWeight:600,color:C.teal700,marginBottom:12}}>
-              📋 Pending My Review
-              <span style={{fontSize:13,fontWeight:400,color:C.gold700,marginLeft:8}}>{pendingOnly.length} pending</span>
-              {doneRecent.length>0&&<span style={{fontSize:12,fontWeight:400,color:C.gray400,marginLeft:8}}>· {doneRecent.length} resolved (7d)</span>}
-            </div>
-          );})()}
-          {pending.map((t,i)=>(
-            <div key={t.id||i} style={{display:"flex",gap:10,padding:"10px 0",borderBottom:`1px solid ${C.gray100}`,alignItems:"flex-start"}}>
-              <div style={{flex:1}}>
-                <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:4}}>
-                  <Badge type="warning">{t.Category}</Badge>
-                  {t.PropertyName&&t.PropertyName!=="General"&&<span style={{fontSize:12,color:C.gray400}}>{t.PropertyName}</span>}
-                  <span style={{fontSize:11,color:C.gray400}}>· {t.VAName} · {fD(t.ActivityDate)}</span>
-                </div>
-                <div style={{fontSize:13,fontWeight:500,color:C.teal700,marginBottom:t.Notes?4:0}}>{t.Title}</div>
-                {t.Notes&&<div style={{fontSize:12,color:C.gray400}}>👤 {t.Notes}</div>}
-              </div>
-              {t.Status==="Completed"
-                ?<Badge type="success">✓ Done</Badge>
-                :<button style={{...S.btn(C.success),padding:"6px 14px",fontSize:12,minHeight:34,flexShrink:0}}
-                  onClick={()=>{const n=prompt("Notes (optional):");if(n!==null)onCompleteManagerReview(t.id,n);}}>
-                  ✓ Done
-                </button>}
-            </div>
-          ))}
-        </div>
-      );
-    })()}
 
-    {/* Recent activity on my properties */}
+        {/* Recent activity on my properties */}
     <div style={S.card}>
       <div style={S.cardTitle}>Recent Activity — My Properties (7 days)</div>
       <div style={{overflowX:"auto"}}>
@@ -2688,6 +2857,178 @@ function AdminQueuePanel({queue,covQ,data,onDeleteTask,onCompleteSubTask}){
     })}
   </div>);
 }
+
+// ============================================================
+// ALL TASKS VIEW (Admin only)
+// ============================================================
+function AllTasksView({data,queue,covQ,timers,onStartTimer,onDeleteTask,onAddTask,config}){
+  const[filterVA,setFilterVA]=useState("");
+  const[filterStatus,setFilterStatus]=useState("queued");
+  const[filterProp,setFilterProp]=useState("");
+  if(!data)return null;
+
+  const allQ=[...queue,...covQ];
+  const allActive=timers;
+  const cats=config?.categories||[];
+
+  const filtered=(filterStatus==="active"?allActive:allQ).filter(t=>{
+    if(filterVA&&t.VAEmail?.toLowerCase()!==filterVA)return false;
+    if(filterProp&&t.PropertyId!==filterProp)return false;
+    return true;
+  });
+
+  return(<div>
+    <div style={{...S.card,display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end",padding:12}}>
+      <div><label style={S.label}>View</label>
+        <select style={{...S.select,width:130}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
+          <option value="queued">Queued ({allQ.length})</option>
+          <option value="active">Active ({allActive.length})</option>
+        </select>
+      </div>
+      <div><label style={S.label}>VA</label>
+        <select style={{...S.select,width:160}} value={filterVA} onChange={e=>setFilterVA(e.target.value)}>
+          <option value="">All VAs</option>
+          {data.vas.map(v=><option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}</option>)}
+        </select>
+      </div>
+      <div><label style={S.label}>Property</label>
+        <select style={{...S.select,width:180}} value={filterProp} onChange={e=>setFilterProp(e.target.value)}>
+          <option value="">All Properties</option>
+          {data.properties.map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}
+        </select>
+      </div>
+      <button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm}} onClick={()=>{setFilterVA("");setFilterStatus("queued");setFilterProp("");}}>Clear</button>
+      <div style={{marginLeft:"auto",fontSize:12,color:C.gray400,alignSelf:"flex-end"}}>{filtered.length} task{filtered.length!==1?"s":""}</div>
+    </div>
+
+    {data.vas.map(va=>{
+      const vTasks=filtered.filter(t=>t.VAEmail?.toLowerCase()===va.Email.toLowerCase());
+      if(!vTasks.length)return null;
+      const isOut=getVAStatus(va)==="Out";
+      return(<div key={va.Email} style={{...S.card,borderLeft:`3px solid ${isOut?C.error:C.teal400}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,paddingBottom:8,borderBottom:`1px solid ${C.gray100}`}}>
+          <div style={{fontSize:15,fontWeight:700,color:isOut?C.error:C.teal700}}>{va.Name}{isOut?" 🛑":""}</div>
+          <div style={{fontSize:12,color:C.gray400}}>{vTasks.length} task{vTasks.length!==1?"s":""}</div>
+        </div>
+        {vTasks.map(t=><TaskRow key={t._localId||t.id} task={t}
+          onStart={filterStatus==="queued"?()=>onStartTimer(t):null}
+          onDelete={onDeleteTask} showVA={false}/>)}
+      </div>);
+    })}
+    {!filtered.length&&<div style={{...S.card,textAlign:"center",padding:40,color:C.gray400}}>No tasks match the current filters.</div>}
+  </div>);
+}
+
+// ============================================================
+// MANAGER REVIEW TAB (Managers + Admin)
+// ============================================================
+function ManagerReviewTab({data,myEmail,isAdmin,onComplete}){
+  const[filterStatus,setFilterStatus]=useState("pending");
+  const[filterVA,setFilterVA]=useState("");
+  if(!data)return null;
+
+  const items=data.activities.filter(a=>{
+    if(a.ActivityType!=="ManagerReview")return false;
+    if(filterStatus==="pending"&&a.Status!=="Pending")return false;
+    if(filterStatus==="recent"&&!(a.Status==="Completed"&&dAgo(actDate(a))<=7))return false;
+    if(!isAdmin&&a.PMEmail?.toLowerCase()!==myEmail&&a.PMEmail?.toLowerCase()!==CONFIG.brandyEmail)return false;
+    if(filterVA&&a.VAEmail?.toLowerCase()!==filterVA)return false;
+    return true;
+  }).sort((a,b)=>new Date(b.ActivityDate||0)-new Date(a.ActivityDate||0));
+
+  const pendingCount=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(isAdmin||a.PMEmail?.toLowerCase()===myEmail||a.PMEmail?.toLowerCase()===CONFIG.brandyEmail)).length;
+
+  return(<div>
+    <div style={{...S.card,display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end",padding:12}}>
+      <div><label style={S.label}>Status</label>
+        <select style={{...S.select,width:160}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
+          <option value="pending">Pending ({pendingCount})</option>
+          <option value="recent">Resolved (last 7d)</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+      {isAdmin&&<div><label style={S.label}>VA</label>
+        <select style={{...S.select,width:160}} value={filterVA} onChange={e=>setFilterVA(e.target.value)}>
+          <option value="">All VAs</option>
+          {data.vas.map(v=><option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}</option>)}
+        </select>
+      </div>}
+    </div>
+
+    {!items.length&&<div style={{...S.card,textAlign:"center",padding:40,color:C.gray400}}>
+      {filterStatus==="pending"?"No pending review items — you're all caught up! ✓":"No items in this filter."}
+    </div>}
+
+    {items.map((t,i)=>(
+      <div key={t.id||i} style={{...S.card,borderLeft:`3px solid ${t.Status==="Completed"?C.success:C.gold500}`,opacity:t.Status==="Completed"?0.75:1}}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:6}}>
+              <Badge type={t.Status==="Completed"?"success":"warning"}>{t.Category}</Badge>
+              {t.Status==="Completed"&&<Badge type="success">✓ Resolved</Badge>}
+              {t.PropertyName&&t.PropertyName!=="General"&&<span style={{fontSize:12,fontWeight:600,color:C.teal600}}>{t.PropertyName}</span>}
+              <span style={{fontSize:11,color:C.gray400}}>from {t.VAName} · {fD(t.ActivityDate)}</span>
+              {isAdmin&&<span style={{fontSize:11,color:C.gray400}}>· PM: {t.PMName}</span>}
+            </div>
+            <div style={{fontSize:14,fontWeight:600,color:C.teal700,marginBottom:t.Notes?4:0}}>{t.Title}</div>
+            {t.Notes&&<div style={{fontSize:12,color:C.gray500}}>👤 {t.Notes}</div>}
+          </div>
+          {t.Status!=="Completed"&&<button style={{...S.btn(C.success),padding:"8px 16px",minHeight:36,flexShrink:0}}
+            onClick={()=>{const n=prompt("Notes (optional):");if(n!==null)onComplete(t.id,n);}}>
+            ✓ Done
+          </button>}
+        </div>
+      </div>
+    ))}
+  </div>);
+}
+
+// ============================================================
+// MY REVIEW TAB (VA — their submitted requests)
+// ============================================================
+function MyReviewTab({data,myEmail,onComplete,onAdd,myProps}){
+  const[showForm,setShowForm]=useState(true);
+  if(!data)return null;
+  const myItems=data.activities.filter(a=>
+    a.ActivityType==="ManagerReview"&&a.VAEmail?.toLowerCase()===myEmail&&
+    (a.Status==="Pending"||(a.Status==="Completed"&&dAgo(actDate(a))<=7))
+  ).sort((a,b)=>new Date(b.ActivityDate||0)-new Date(a.ActivityDate||0));
+
+  return(<div>
+    <div style={{...S.card,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div>
+        <div style={{fontSize:15,fontWeight:600,color:C.teal700}}>📋 My Manager Requests</div>
+        <div style={{fontSize:12,color:C.gray400,marginTop:2}}>Items you've sent for manager review</div>
+      </div>
+      <button style={{...S.btnO(C.gold700,C.gold500),...S.btnSm}} onClick={()=>setShowForm(!showForm)}>{showForm?"Cancel":"+ New Request"}</button>
+    </div>
+    {showForm&&<ManagerReviewForm data={data} myEmail={myEmail} myVa={null} myProps={myProps}
+      onSubmit={(item)=>{onAdd(item);setShowForm(false);}}
+      pendingReviews={[]} onComplete={onComplete}/>}
+    {!myItems.length&&!showForm&&<div style={{...S.card,textAlign:"center",padding:40,color:C.gray400}}>No pending requests.</div>}
+    {myItems.map((t,i)=>(
+      <div key={t.id||i} style={{...S.card,borderLeft:`3px solid ${t.Status==="Completed"?C.success:C.gold500}`,opacity:t.Status==="Completed"?0.75:1}}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:4}}>
+              <Badge type={t.Status==="Completed"?"success":"warning"}>{t.Category}</Badge>
+              {t.Status==="Completed"&&<Badge type="success">✓ Resolved</Badge>}
+              {t.PropertyName&&t.PropertyName!=="General"&&<span style={{fontSize:12,color:C.gray400}}>{t.PropertyName}</span>}
+              <span style={{fontSize:11,color:C.gray400}}>→ {t.PMName} · {fD(t.ActivityDate)}</span>
+            </div>
+            <div style={{fontSize:13,fontWeight:500,color:t.Status==="Completed"?C.gray400:C.teal700,textDecoration:t.Status==="Completed"?"line-through":"none"}}>{t.Title}</div>
+            {t.Notes&&<div style={{fontSize:11,color:C.gray400}}>👤 {t.Notes}</div>}
+          </div>
+          {t.Status!=="Completed"&&<button style={{...S.btnO(C.success,C.success),padding:"6px 12px",fontSize:12,minHeight:32,flexShrink:0}}
+            onClick={()=>{const n=prompt("PM addressed this? Notes:");if(n!==null)onComplete(t.id,n);}}>
+            ✓ Done
+          </button>}
+        </div>
+      </div>
+    ))}
+  </div>);
+}
+
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(React.createElement(App));
