@@ -38,7 +38,7 @@ const CONFIG = {
 };
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE = `${GRAPH}/sites/${CONFIG.siteId}`;
-const SCOPES = ["Sites.ReadWrite.All", "User.Read", "User.Invite.All"];
+const SCOPES = ["Sites.ReadWrite.All", "User.Read", "User.Invite.All", "Mail.Send"];
 
 // ============================================================
 // ROLE DETECTION
@@ -1007,6 +1007,80 @@ function App(){
     }catch(e){fl("Error: "+e.message);}
   }
 
+  // ── Manager Review Tasks ──
+  async function addManagerReview(item){
+    try{
+      const tk=await gT();
+      const res=await gPost(tk,lUrl("VA_Activity"),{
+        Title:item.description,
+        ActivityType:"ManagerReview",
+        VAEmail:myEmail,VAName:myEmp?.Name||myEmail,
+        PMEmail:item.pmEmail,PMName:item.pmName,
+        PropertyId:item.propertyId||"",PropertyName:item.propertyName||"General",
+        Category:item.category,
+        Notes:item.residentName||"",
+        Status:"Pending",
+        ActivityDate:new Date().toISOString(),
+        StartTime:new Date().toISOString()
+      });
+      fl(`Review request sent to ${item.pmName}`);
+      // Send email notification via Graph
+      try{await sendReviewEmail(tk,item,myEmp?.Name||myEmail);}
+      catch(e){console.warn("[VT] Email failed:",e.message);}
+      await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+
+  async function completeManagerReview(taskId,notes){
+    try{
+      const tk=await gT();
+      await gPatch(tk,iUrl("VA_Activity",taskId),{
+        Status:"Completed",Notes:notes||"",EndTime:new Date().toISOString()
+      });
+      fl("Marked complete!");
+      await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+
+  async function sendReviewEmail(tk,item,vaName){
+    const subject=`[NewShire] Action Needed: ${item.category} — ${item.propertyName||"General"}`;
+    const body=`
+<div style="font-family:Arial,sans-serif;max-width:600px">
+  <div style="background:#1C3740;padding:16px 20px;border-bottom:3px solid #CDA04B">
+    <span style="color:#fff;font-size:16px;font-weight:bold">VA Productivity Tracker</span><br/>
+    <span style="color:#CDA04B;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">NewShire Property Management</span>
+  </div>
+  <div style="padding:20px;background:#f7f8f7;border:1px solid #e8eaea">
+    <h2 style="color:#28434C;margin:0 0 16px">Action Needed — ${item.category}</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <tr><td style="padding:6px 0;color:#7A8585;width:140px">Property</td><td style="padding:6px 0;color:#1A2A30;font-weight:600">${item.propertyName||"General"}</td></tr>
+      <tr><td style="padding:6px 0;color:#7A8585">Category</td><td style="padding:6px 0;color:#1A2A30;font-weight:600">${item.category}</td></tr>
+      ${item.residentName?`<tr><td style="padding:6px 0;color:#7A8585">Resident/Applicant</td><td style="padding:6px 0;color:#1A2A30;font-weight:600">${item.residentName}</td></tr>`:""}
+      <tr><td style="padding:6px 0;color:#7A8585">Submitted by</td><td style="padding:6px 0;color:#1A2A30">${vaName}</td></tr>
+    </table>
+    <div style="margin:16px 0;padding:12px;background:#fff;border-left:3px solid #CDA04B;border-radius:4px">
+      <div style="font-size:12px;color:#7A8585;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em">Description</div>
+      <div style="color:#1A2A30;font-size:14px">${item.description}</div>
+    </div>
+    <div style="margin-top:16px;padding:12px;background:#EDF4F7;border-radius:4px;font-size:12px;color:#3A6577">
+      View and respond in the <a href="https://newshirepm.github.io/va-tracker/" style="color:#CDA04B">VA Productivity Tracker</a> under <strong>My Properties → Pending My Review</strong>.
+    </div>
+  </div>
+  <div style="padding:10px 20px;background:#1C3740;text-align:center;font-size:11px;color:#4A7E91">
+    2025 · NewShire Property Management · This is an automated notification
+  </div>
+</div>`;
+    await fetch(`${GRAPH}/me/sendMail`,{
+      method:"POST",
+      headers:{Authorization:`Bearer ${tk}`,"Content-Type":"application/json"},
+      body:JSON.stringify({message:{
+        subject,
+        body:{contentType:"HTML",content:body},
+        toRecipients:[{emailAddress:{address:item.pmEmail,name:item.pmName}}]
+      },saveToSentItems:false})
+    });
+  }
+
   // ── Weekly Report ──
   function generateWeeklyReport(){
     if(!data)return null;
@@ -1206,9 +1280,9 @@ function App(){
         {ck==="gactive"&&<ActiveView timers={timers.filter(t=>guestVAEmails.includes(t.VAEmail?.toLowerCase()))} tick={tick} isMgr={true} readOnly={true} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={null}/>}
         {ck==="mdash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} shift={shift} myEmail={myEmail} tick={tick} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} filterProps={mgrProps}/>}
-        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onUnclaimTask={unclaimTask} onRequestHelp={requestHelp} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} config={data?.config}/>}
+        {ck==="tasks"&&<MyTasksView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onClaimCov={claimCov} onUnclaimTask={unclaimTask} onRequestHelp={requestHelp} onAddTask={addTask} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} onAddManagerReview={addManagerReview} onCompleteManagerReview={completeManagerReview} config={data?.config}/>}
         {ck==="active"&&<ActiveView timers={isVA?timers.filter(t=>t.VAEmail.toLowerCase()===myEmail):timers} tick={tick} isMgr={isMgr} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onBackdate={backdateFinish}/>}
-        {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin}/>}
+        {ck==="mprops"&&<ManagerPropsView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} onCompleteManagerReview={completeManagerReview}/>}
         {ck==="history"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps} onUpdateDuration={updateDuration} guestVAEmails={guestVAEmails}/>}
         {ck==="score"&&<ScorecardView data={data} role={role} myEmail={myEmail} isMgr={isMgr} myVa={myVa} myProps={myProps} mgrProps={mgrProps} guestVAs={guestVAs} shift={shift} tick={tick}/>}
         {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onRecoverTasks={recoverTasks} onAssignTask={addTask} onAddGroupedTasks={addGroupedTasks} onCloseDay={closeDay} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeactivateProperty={deactivateProperty} onDeleteTask={deleteTask} onCompleteSubTask={completeSubTask} generateReport={generateWeeklyReport} onAddGuest={addGuest} onUpdateGuest={updateGuest} onDeactivateGuest={deactivateGuest} onCleanup={cleanupDuplicates} onBackdate={backdateTasks} onAdminClockIn={adminClockIn} onAddBackdatedShift={addBackdatedShift} onClosePastDays={closePastDays} onConfirmClosePastDays={confirmClosePastDays} onResolveBlocked={resolveBlocked}/>}
@@ -1272,12 +1346,20 @@ function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,se
         {!filterProps&&!isGuest&&<KPI label="Shift Hrs" value={fM(shiftMin)}/>}
         {!filterProps&&!isGuest&&<KPI label="Utilization" value={`${util}%`} color={util>=75?C.success:util>=50?C.warning:shiftMin>0?C.error:C.teal700}/>}
         <KPI label="Blocked" value={blocked.length} color={blocked.length>0?C.error:C.success}/>
-        {!isGuest&&<KPI label="Coverage" value={covQ.length} color={covQ.length>0?C.warning:C.success}/>}
+        {!isGuest&&<KPI label="Coverage" value={covQ.length} color={covQ.length>0?C.warning:C.success}/>
+        {(()=>{const pendingReviews=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(!propIds||propIds.has(a.PropertyId)));return pendingReviews.length>0&&<KPI label="Mgr Review" value={pendingReviews.length} color={C.gold700} sub="pending"/>;})()}}
         {!filterProps&&!isGuest&&<KPI label="VAs Out" value={data.vas.filter(v=>getVAStatus(v)==="Out").length} color={data.vas.filter(v=>getVAStatus(v)==="Out").length>0?C.warning:C.teal700}/>}
       </div>
 
       {/* Needs Attention */}
-      {(blocked.length>0||inc.length>0||covQ.length>0)&&(
+      {(()=>{const pendingMR=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(!propIds||propIds.has(a.PropertyId)));return pendingMR.length>0&&(
+    <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`,background:C.gold50,marginBottom:14}}>
+      <div style={{fontSize:15,fontWeight:600,color:C.gold700,marginBottom:8}}>📋 Pending Manager Review ({pendingMR.length})</div>
+      {pendingMR.slice(0,5).map((t,i)=><div key={i} style={{fontSize:13,color:C.gray600,padding:"3px 0"}}>{t.VAName}: {t.Title}{t.PropertyName&&t.PropertyName!=="General"?` — ${t.PropertyName}`:""}</div>)}
+      {pendingMR.length>5&&<div style={{fontSize:11,color:C.gray400,marginTop:4}}>+{pendingMR.length-5} more</div>}
+    </div>
+  );})()}
+  {(blocked.length>0||inc.length>0||covQ.length>0)&&(
         <div style={{...S.card,borderLeft:`3px solid ${C.error}`,background:C.errorBg}}>
           <div style={{fontSize:16,fontWeight:600,color:C.error,marginBottom:10}}>{"\u{1F6A8}"} Needs Attention</div>
           {blocked.length>0&&<div style={{marginBottom:8}}><div style={{fontSize:12,fontWeight:600,color:C.error,marginBottom:4}}>Blocked Tasks ({blocked.length})</div>{blocked.slice(0,5).map((t,i)=><div key={i} style={{fontSize:13,color:C.gray600,padding:"3px 0"}}>{t.VAName}: {t.Title} — {t.PropertyName}{t.Notes?` · ${t.Notes}`:""}</div>)}{blocked.length>5&&<div style={{fontSize:11,color:C.gray400}}>+{blocked.length-5} more</div>}</div>}
@@ -1379,6 +1461,102 @@ function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,se
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// MANAGER REVIEW FORM
+// ============================================================
+const MR_CATS=["Application Review","Property Question","Resident Communication","Other"];
+
+function ManagerReviewForm({data,myEmail,myVa,myProps,onSubmit,pendingReviews,onComplete}){
+  const[open,setOpen]=useState(false);
+  const[mrCat,setMrCat]=useState("");const[mrProp,setMrProp]=useState("");
+  const[mrResident,setMrResident]=useState("");const[mrDesc,setMrDesc]=useState("");
+  const[mrAddress,setMrAddress]=useState("");
+
+  // Derive PM for selected property
+  const selProp=mrProp?data?.properties.find(p=>p.Title===mrProp):null;
+  const targetPm=selProp?data?.pms.find(pm=>pm.Email?.toLowerCase()===selProp.PMEmail?.toLowerCase()):null;
+  const isSFR=selProp?.PropertyGroup==="Single Family"||selProp?.PropertyName?.toLowerCase().includes("single family")||selProp?.PropertyGroup?.toLowerCase().includes("single");
+
+  function handleSubmit(){
+    if(!mrCat||!mrDesc)return;
+    const prop=mrProp?data?.properties.find(p=>p.Title===mrProp):null;
+    const pm=targetPm||data?.pms[0];
+    if(!pm){alert("No Property Manager found. Select a property.");return;}
+    // Append address to resident field if SFR
+    const residentFull=isSFR&&mrAddress?`${mrResident?mrResident+" — ":""}${mrAddress}`:mrResident;
+    onSubmit({
+      category:mrCat,propertyId:mrProp||"",propertyName:prop?.PropertyName||"General",
+      pmEmail:pm.Email,pmName:pm.Name,residentName:residentFull,description:mrDesc
+    });
+    setMrCat("");setMrProp("");setMrResident("");setMrDesc("");setMrAddress("");setOpen(false);
+  }
+
+  return(
+    <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:600,color:C.teal700}}>📋 Manager Review</div>
+          {pendingReviews.length>0&&<div style={{fontSize:11,color:C.gold700,marginTop:1}}>{pendingReviews.length} item{pendingReviews.length!==1?"s":""} pending</div>}
+        </div>
+        <button style={{...S.btnO(C.gold700,C.gold500),...S.btnSm}} onClick={()=>setOpen(!open)}>{open?"Cancel":"+ Request"}</button>
+      </div>
+
+      {/* Pending items this VA submitted */}
+      {pendingReviews.length>0&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.gray100}`}}>
+        {pendingReviews.map((t,i)=>(
+          <div key={t.id||i} style={{display:"flex",gap:8,padding:"7px 0",borderBottom:`1px solid ${C.gray100}`,alignItems:"flex-start",opacity:t.Status==="Completed"?0.6:1}}>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:3}}>
+                <Badge type={t.Status==="Completed"?"success":"warning"}>{t.Category}</Badge>
+                {t.PropertyName&&t.PropertyName!=="General"&&<span style={{fontSize:11,color:C.gray400}}>{t.PropertyName}</span>}
+                <span style={{fontSize:11,color:C.gray400}}>→ {t.PMName}</span>
+                {t.Status==="Completed"&&<Badge type="success">✓ Resolved</Badge>}
+              </div>
+              <div style={{fontSize:12,fontWeight:500,color:t.Status==="Completed"?C.gray400:C.teal700,textDecoration:t.Status==="Completed"?"line-through":"none"}}>{t.Title}</div>
+              {t.Notes&&<div style={{fontSize:11,color:C.gray400}}>👤 {t.Notes}</div>}
+            </div>
+            {t.Status!=="Completed"&&<button style={{...S.btnO(C.success,C.success),padding:"4px 10px",fontSize:11,minHeight:28}}
+              onClick={()=>{const n=prompt("Completion notes (optional):");if(n!==null)onComplete(t.id,n);}}>
+              ✓ Done
+            </button>}
+          </div>
+        ))}
+      </div>}
+
+      {open&&<div style={{marginTop:14}}>
+        <div style={S.row}>
+          <div style={{flex:1,minWidth:150}}><label style={S.label}>Category *</label>
+            <select style={S.select} value={mrCat} onChange={e=>setMrCat(e.target.value)}>
+              <option value="">Select...</option>
+              {MR_CATS.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div style={{flex:1,minWidth:150}}><label style={S.label}>Property</label>
+            <select style={S.select} value={mrProp} onChange={e=>setMrProp(e.target.value)}>
+              <option value="">General</option>
+              {(myProps||[]).map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}
+            </select>
+          </div>
+        </div>
+        {targetPm&&<div style={{fontSize:11,color:C.success,marginTop:4}}>→ Will notify: {targetPm.Name} ({targetPm.Email})</div>}
+        {isSFR&&<div style={{marginTop:8}}><label style={S.label}>Property Address *</label>
+          <input style={S.input} value={mrAddress} onChange={e=>setMrAddress(e.target.value)} placeholder="e.g., 123 Main St, Greenville SC"/>
+          <div style={{fontSize:11,color:C.gold700,marginTop:3}}>Single Family portfolio — enter the specific home address</div>
+        </div>}
+        <div style={{marginTop:8}}><label style={S.label}>Resident / Applicant / Prospect</label>
+          <input style={S.input} value={mrResident} onChange={e=>setMrResident(e.target.value)} placeholder="Name (optional)"/>
+        </div>
+        <div style={{marginTop:8}}><label style={S.label}>Description — what action is needed? *</label>
+          <textarea style={{...S.input,minHeight:72,resize:"vertical"}} value={mrDesc} onChange={e=>setMrDesc(e.target.value)} placeholder="e.g., Application ready for approval — please review and advise..."/>
+        </div>
+        <button style={{...S.btn(C.gold500,C.dark),width:"100%",marginTop:10,opacity:(!mrCat||!mrDesc)?0.5:1}} onClick={handleSubmit}>
+          📋 Send to Manager
+        </button>
+      </div>}
     </div>
   );
 }
@@ -1489,7 +1667,7 @@ function groupTasks(tasks,allowFallback=false){
 // ============================================================
 // MY TASKS (VA view)
 // ============================================================
-function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onUnclaimTask,onRequestHelp,onAddTask,onDeleteTask,onCompleteSubTask,config}){
+function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onClaimCov,onUnclaimTask,onRequestHelp,onAddTask,onDeleteTask,onCompleteSubTask,onAddManagerReview,onCompleteManagerReview,config}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   const isAdm=role==="admin";
   const myTasks=isAdm?queue:queue.filter(t=>t.VAEmail&&t.VAEmail.toLowerCase()===myEmail);
@@ -1572,6 +1750,11 @@ function MyTasksView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tic
         ?<TaskRow key={item.task._localId} task={item.task} onStart={()=>onStartTimer(item.task)} onDelete={isAdm?onDeleteTask:null} showVA={isAdm} onComplete={onCompleteSubTask} onRequestHelp={()=>onRequestHelp(item.task)}/>
         :<TaskGroupRow key={item.tasks[0].GroupId} tasks={item.tasks} onStartGroup={(first,all)=>onStartTimer({...first,_groupSiblings:all.filter(t=>t._localId!==first._localId),_groupSize:all.length})} onDelete={isAdm?onDeleteTask:null} onCompleteSubTask={onCompleteSubTask} showVA={isAdm}/>
       )}</div>}
+    {/* Manager Review */}
+    <ManagerReviewForm data={data} myEmail={myEmail} myVa={myVa} myProps={portProps} onSubmit={onAddManagerReview}
+      pendingReviews={data?.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.VAEmail?.toLowerCase()===myEmail&&(a.Status==="Pending"||(a.Status==="Completed"&&dAgo(actDate(a))<=7)))||[]}
+      onComplete={onCompleteManagerReview}/>
+
     {/* Add Task */}
     <div style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:14,fontWeight:600,color:C.teal700}}>➕ Add Task</div><button style={S.btnO(C.teal700,C.teal100)} onClick={()=>setShowForm(!showForm)}>{showForm?"Cancel":"New"}</button></div>
       {showForm&&<div style={{marginTop:14}}>
@@ -1624,7 +1807,7 @@ function ActiveView({timers:tms,tick,isMgr,readOnly,onPause,onResume,onFinish,on
 // ============================================================
 // MANAGER PROPERTIES VIEW
 // ============================================================
-function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTask,getVA}){
+function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTask,getVA,isAdmin,onCompleteManagerReview}){
   const[selProp,setSelProp]=useState("");
   const[tCat,setTCat]=useState("");const[tDesc,setTDesc]=useState("");const[tPri,setTPri]=useState("Normal");const[tNotes,setTNotes]=useState("");
   const cats=data?.config?.categories||[];
@@ -1687,6 +1870,46 @@ function ManagerPropsView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,onAddTa
       <button style={{...S.btn(C.headerBg),width:"100%",marginTop:12}} onClick={handleSubmit}>{"\u{1F4CC}"} Submit Task</button>
       {selProp&&(()=>{const va=getVA(selProp);return va?<div style={{fontSize:12,color:C.success,marginTop:8}}>{"\u2192"} Routes to: {va.Name}{getVAStatus(va)==="Out"?` (\u26A0 currently OUT — will go to coverage)`:""}</div>:<div style={{fontSize:12,color:C.error,marginTop:8}}>{"\u26A0"} No VA assigned to this property</div>;})()}
     </div>
+
+    {/* Pending My Review */}
+    {(()=>{
+      const pending=data.activities.filter(a=>
+        a.ActivityType==="ManagerReview"&&
+        (a.Status==="Pending"||(a.Status==="Completed"&&dAgo(actDate(a))<=7))&&
+        (isAdmin||a.PMEmail?.toLowerCase()===myEmail)
+      ).sort((a,b)=>new Date(b.ActivityDate||0)-new Date(a.ActivityDate||0));
+      if(!pending.length)return null;
+      return(
+        <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`}}>
+          {(()=>{const pendingOnly=pending.filter(x=>x.Status==="Pending");const doneRecent=pending.filter(x=>x.Status==="Completed");return(
+            <div style={{fontSize:16,fontWeight:600,color:C.teal700,marginBottom:12}}>
+              📋 Pending My Review
+              <span style={{fontSize:13,fontWeight:400,color:C.gold700,marginLeft:8}}>{pendingOnly.length} pending</span>
+              {doneRecent.length>0&&<span style={{fontSize:12,fontWeight:400,color:C.gray400,marginLeft:8}}>· {doneRecent.length} resolved (7d)</span>}
+            </div>
+          );})()}
+          {pending.map((t,i)=>(
+            <div key={t.id||i} style={{display:"flex",gap:10,padding:"10px 0",borderBottom:`1px solid ${C.gray100}`,alignItems:"flex-start"}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:4}}>
+                  <Badge type="warning">{t.Category}</Badge>
+                  {t.PropertyName&&t.PropertyName!=="General"&&<span style={{fontSize:12,color:C.gray400}}>{t.PropertyName}</span>}
+                  <span style={{fontSize:11,color:C.gray400}}>· {t.VAName} · {fD(t.ActivityDate)}</span>
+                </div>
+                <div style={{fontSize:13,fontWeight:500,color:C.teal700,marginBottom:t.Notes?4:0}}>{t.Title}</div>
+                {t.Notes&&<div style={{fontSize:12,color:C.gray400}}>👤 {t.Notes}</div>}
+              </div>
+              {t.Status==="Completed"
+                ?<Badge type="success">✓ Done</Badge>
+                :<button style={{...S.btn(C.success),padding:"6px 14px",fontSize:12,minHeight:34,flexShrink:0}}
+                  onClick={()=>{const n=prompt("Notes (optional):");if(n!==null)onCompleteManagerReview(t.id,n);}}>
+                  ✓ Done
+                </button>}
+            </div>
+          ))}
+        </div>
+      );
+    })()}
 
     {/* Recent activity on my properties */}
     <div style={S.card}>
