@@ -1787,11 +1787,11 @@ function InlineTimer({timer:t,tick,isMgr,onPause,onResume,onFinish,onCancel,onBl
         <div style={{fontFamily:mono,fontSize:18,fontWeight:700,color:ip?C.warning:C.success,minWidth:60,textAlign:"right"}}>{fTm(el)}</div>
       </div>
       <div style={{display:"flex",gap:5,marginTop:8,flexWrap:"wrap"}}>
-        {ip?<button style={{...S.btn(C.success),...S.btnSm,flex:1}} onClick={()=>onResume(t._localId)}>{"\u25B6"} Resume</button>
-           :<button style={{...S.btnO(C.warning,C.warning),...S.btnSm,flex:1}} onClick={()=>onPause(t._localId)}>{"\u23F8"} Pause</button>}
-        <button style={{...S.btn(C.success),...S.btnSm,flex:1}} onClick={()=>{const n=prompt("Notes (optional):");const d=prompt("Date (YYYY-MM-DD, blank=today):",t.StartTime?.slice(0,10)||today());if(d===null)return;onFinish(t._localId,"Completed",n||"",(d.trim()&&d.trim()!==today())?d.trim():null);}}>{"\\u2713"} Done</button>
-        <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"5px 10px"}} title="Block task" onClick={()=>onBlock?onBlock(t._localId,t):(()=>{const n=prompt("Block reason (required):");if(n&&n.trim())onFinish(t._localId,"Blocked",n.trim());})()}>{"\\\\u26A0"}</button>
-        <button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm,padding:"5px 10px"}} onClick={()=>onCancel(t._localId)}>{"\u21A9"}</button>
+        {ip?<button style={{...S.btn(C.success),...S.btnSm,flex:1}} onClick={()=>onResume(t._localId)}>▶ Resume</button>
+           :<button style={{...S.btnO(C.warning,C.warning),...S.btnSm,flex:1}} onClick={()=>onPause(t._localId)}>⏸ Pause</button>}
+        <button style={{...S.btn(C.success),...S.btnSm,flex:1}} onClick={()=>{const n=prompt("Notes (optional):");const d=prompt("Date (YYYY-MM-DD, blank=today):",t.StartTime?.slice(0,10)||today());if(d===null)return;onFinish(t._localId,"Completed",n||"",(d.trim()&&d.trim()!==today())?d.trim():null);}}>&#10003; Done</button>
+        <button style={{...S.btnO(C.error,C.error),...S.btnSm,padding:"5px 10px"}} title="Block task" onClick={()=>onBlock?onBlock(t._localId,t):(()=>{const n=prompt("Block reason (required):");if(n&&n.trim())onFinish(t._localId,"Blocked",n.trim());})()}>&#9888;</button>
+        <button style={{...S.btnO(C.gray400,C.gray200),...S.btnSm,padding:"5px 10px"}} onClick={()=>onCancel(t._localId)}>↩</button>
       </div>
     </div>
   );
