@@ -1346,8 +1346,8 @@ function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,se
         {!filterProps&&!isGuest&&<KPI label="Shift Hrs" value={fM(shiftMin)}/>}
         {!filterProps&&!isGuest&&<KPI label="Utilization" value={`${util}%`} color={util>=75?C.success:util>=50?C.warning:shiftMin>0?C.error:C.teal700}/>}
         <KPI label="Blocked" value={blocked.length} color={blocked.length>0?C.error:C.success}/>
-        {!isGuest&&<KPI label="Coverage" value={covQ.length} color={covQ.length>0?C.warning:C.success}/>
-        {(()=>{const pendingReviews=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(!propIds||propIds.has(a.PropertyId)));return pendingReviews.length>0&&<KPI label="Mgr Review" value={pendingReviews.length} color={C.gold700} sub="pending"/>;})()}}
+        {!isGuest&&<KPI label="Coverage" value={covQ.length} color={covQ.length>0?C.warning:C.success}/>}
+        {(()=>{const pendingReviews=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(!propIds||propIds.has(a.PropertyId)));return pendingReviews.length>0&&<KPI label="Mgr Review" value={pendingReviews.length} color={C.gold700} sub="pending"/>;})()}
         {!filterProps&&!isGuest&&<KPI label="VAs Out" value={data.vas.filter(v=>getVAStatus(v)==="Out").length} color={data.vas.filter(v=>getVAStatus(v)==="Out").length>0?C.warning:C.teal700}/>}
       </div>
 
