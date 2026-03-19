@@ -1410,6 +1410,8 @@ function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,se
   const util=shiftMin>0?Math.round(taskMin/shiftMin*100):0;
   const filteredVAs=filterVAs||( propIds?data.vas.filter(v=>data.portfolios.some(p=>propIds.has(p.PropertyId)&&p.VAEmail?.toLowerCase()===v.Email.toLowerCase())):data.vas);
 
+  const pendingMR=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(!propIds||propIds.has(a.PropertyId)));
+
   return(
     <div>
       {/* Date filter */}
@@ -1437,14 +1439,12 @@ function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,se
       </div>
 
       {/* Needs Attention */}
-      {(()=>{const pendingMR=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(!propIds||propIds.has(a.PropertyId)));return pendingMR.length>0&&(
-    <div style={{...S.card,borderLeft:`3px solid ${C.gold500}`,background:C.gold50,marginBottom:14}}>
-      <div style={{fontSize:15,fontWeight:600,color:C.gold700,marginBottom:8}}>📋 Pending Manager Review ({pendingMR.length})</div>
-      {pendingMR.slice(0,5).map((t,i)=><div key={i} style={{fontSize:13,color:C.gray600,padding:"3px 0"}}>{t.VAName}: {t.Title}{t.PropertyName&&t.PropertyName!=="General"?` — ${t.PropertyName}`:""}</div>)}
-      {pendingMR.length>5&&<div style={{fontSize:11,color:C.gray400,marginTop:4}}>+{pendingMR.length-5} more</div>}
-    </div>
-  );})()}
-  {(blocked.length>0||inc.length>0||covQ.length>0)&&(
+      {pendingMR.length>0&&<div style={{...S.card,borderLeft:`3px solid ${C.gold500}`,background:C.gold50,marginBottom:14}}>
+        <div style={{fontSize:15,fontWeight:600,color:C.gold700,marginBottom:8}}>📋 Pending Manager Review ({pendingMR.length})</div>
+        {pendingMR.slice(0,5).map((t,i)=><div key={i} style={{fontSize:13,color:C.gray600,padding:"3px 0"}}>{t.VAName}: {t.Title}{t.PropertyName&&t.PropertyName!=="General"?` — ${t.PropertyName}`:""}</div>)}
+        {pendingMR.length>5&&<div style={{fontSize:11,color:C.gray400,marginTop:4}}>+{pendingMR.length-5} more</div>}
+      </div>}
+      {(blocked.length>0||inc.length>0||covQ.length>0)&&(
         <div style={{...S.card,borderLeft:`3px solid ${C.error}`,background:C.errorBg}}>
           <div style={{fontSize:16,fontWeight:600,color:C.error,marginBottom:10}}>{"\u{1F6A8}"} Needs Attention</div>
           {blocked.length>0&&<div style={{marginBottom:8}}><div style={{fontSize:12,fontWeight:600,color:C.error,marginBottom:4}}>Blocked Tasks ({blocked.length})</div>{blocked.slice(0,5).map((t,i)=><div key={i} style={{fontSize:13,color:C.gray600,padding:"3px 0"}}>{t.VAName}: {t.Title} — {t.PropertyName}{t.Notes?` · ${t.Notes}`:""}</div>)}{blocked.length>5&&<div style={{fontSize:11,color:C.gray400}}>+{blocked.length-5} more</div>}</div>}
@@ -1547,8 +1547,6 @@ function DashboardView({data,queue,timers,covQ,shift,myEmail,tick,dfFrom,dfTo,se
         </div>
       </div>
     </div>
-  </div>
-</div>
   );
 }
 
