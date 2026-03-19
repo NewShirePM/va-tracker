@@ -1091,7 +1091,7 @@ function App(){
         Title:item.description,
         ActivityType:"ManagerReview",
         VAEmail:myEmail,VAName:myEmp?.Name||myEmail,
-        PMEmail:pmEmail,PMName:pmName,
+        AssignedByEmail:pmEmail,AssignedByName:pmName,
         PropertyId:item.propertyId||"",PropertyName:item.propertyName||"General",
         Category:item.category,
         Notes:item.residentName||"",
@@ -1316,7 +1316,7 @@ function App(){
   // TABS
   // ============================================================
   const TABS=[];
-  const mrPendingCount=data?data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(effectiveIsAdmin||a.PMEmail?.toLowerCase()===effectiveEmail||a.PMEmail?.toLowerCase()===CONFIG.brandyEmail)).length:0;
+  const mrPendingCount=data?data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(effectiveIsAdmin||a.AssignedByEmail?.toLowerCase()===effectiveEmail||a.AssignedByEmail?.toLowerCase()===CONFIG.brandyEmail)).length:0;
   const myMrCount=data?data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&a.VAEmail?.toLowerCase()===effectiveEmail).length:0;
   if(isGuest){
     TABS.push({n:"Dashboard",k:"gdash"});
@@ -2958,12 +2958,12 @@ function ManagerReviewTab({data,myEmail,isAdmin,onComplete}){
     if(a.ActivityType!=="ManagerReview")return false;
     if(filterStatus==="pending"&&a.Status!=="Pending")return false;
     if(filterStatus==="recent"&&!(a.Status==="Completed"&&dAgo(actDate(a))<=7))return false;
-    if(!isAdmin&&a.PMEmail?.toLowerCase()!==myEmail&&a.PMEmail?.toLowerCase()!==CONFIG.brandyEmail)return false;
+    if(!isAdmin&&a.AssignedByEmail?.toLowerCase()!==myEmail&&a.AssignedByEmail?.toLowerCase()!==CONFIG.brandyEmail)return false;
     if(filterVA&&a.VAEmail?.toLowerCase()!==filterVA)return false;
     return true;
   }).sort((a,b)=>new Date(b.ActivityDate||0)-new Date(a.ActivityDate||0));
 
-  const pendingCount=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(isAdmin||a.PMEmail?.toLowerCase()===myEmail||a.PMEmail?.toLowerCase()===CONFIG.brandyEmail)).length;
+  const pendingCount=data.activities.filter(a=>a.ActivityType==="ManagerReview"&&a.Status==="Pending"&&(isAdmin||a.AssignedByEmail?.toLowerCase()===myEmail||a.AssignedByEmail?.toLowerCase()===CONFIG.brandyEmail)).length;
 
   return(<div>
     <div style={{...S.card,display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end",padding:12}}>
@@ -2995,7 +2995,7 @@ function ManagerReviewTab({data,myEmail,isAdmin,onComplete}){
               {t.Status==="Completed"&&<Badge type="success">✓ Resolved</Badge>}
               {t.PropertyName&&t.PropertyName!=="General"&&<span style={{fontSize:12,fontWeight:600,color:C.teal600}}>{t.PropertyName}</span>}
               <span style={{fontSize:11,color:C.gray400}}>from {t.VAName} · {fD(t.ActivityDate)}</span>
-              {isAdmin&&<span style={{fontSize:11,color:C.gray400}}>· PM: {t.PMName}</span>}
+              {isAdmin&&<span style={{fontSize:11,color:C.gray400}}>· PM: {t.AssignedByName}</span>}
             </div>
             <div style={{fontSize:14,fontWeight:600,color:C.teal700,marginBottom:t.Notes?4:0}}>{t.Title}</div>
             {t.Notes&&<div style={{fontSize:12,color:C.gray500}}>👤 {t.Notes}</div>}
@@ -3041,7 +3041,7 @@ function MyReviewTab({data,myEmail,onComplete,onAdd,myProps}){
               <Badge type={t.Status==="Completed"?"success":"warning"}>{t.Category}</Badge>
               {t.Status==="Completed"&&<Badge type="success">✓ Resolved</Badge>}
               {t.PropertyName&&t.PropertyName!=="General"&&<span style={{fontSize:12,color:C.gray400}}>{t.PropertyName}</span>}
-              <span style={{fontSize:11,color:C.gray400}}>→ {t.PMName} · {fD(t.ActivityDate)}</span>
+              <span style={{fontSize:11,color:C.gray400}}>→ {t.AssignedByName||t.PMName} · {fD(t.ActivityDate)}</span>
             </div>
             <div style={{fontSize:13,fontWeight:500,color:t.Status==="Completed"?C.gray400:C.teal700,textDecoration:t.Status==="Completed"?"line-through":"none"}}>{t.Title}</div>
             {t.Notes&&<div style={{fontSize:11,color:C.gray400}}>👤 {t.Notes}</div>}
