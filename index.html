@@ -1188,7 +1188,13 @@ function App(){
       const catM={};vD.forEach(t=>{if(!catM[t.Category])catM[t.Category]={c:0,m:0};catM[t.Category].c++;catM[t.Category].m+=(t.DurationMin||0);});
       const catList=Object.entries(catM).sort((a,b)=>b[1].m-a[1].m);
       const propM={};vT.forEach(t=>{const pn=t.PropertyName||"General";if(!propM[pn])propM[pn]={done:0,total:0,blocked:0};propM[pn].total++;if(t.Status==="Completed")propM[pn].done++;if(t.Status==="Blocked")propM[pn].blocked++;});
-      return{va,vT,vD,vB,vI,vSm,vTm,vR,vU,port,catList,propM};
+      // Absence records in the date range
+      const vAbsences=data.activities.filter(a=>
+        a.ActivityType==="Absence"&&
+        a.VAEmail?.toLowerCase()===va.Email.toLowerCase()&&
+        inRange(actDate(a),from,to)
+      ).sort((a,b)=>new Date(actDate(a))-new Date(actDate(b)));
+      return{va,vT,vD,vB,vI,vSm,vTm,vR,vU,port,catList,propM,vAbsences};
     });
 
     // Coverage
@@ -1254,11 +1260,28 @@ function App(){
           </div>
           ${vB.length?`<div style="margin-top:14px;padding:10px 14px;background:rgba(196,75,59,0.06);border-left:3px solid #C44B3B;border-radius:4px">
             <div style="font-size:12px;font-weight:600;color:#C44B3B;margin-bottom:6px">⚠ Blocked Tasks (${vB.length})</div>
-            ${vB.map(t=>`<div style="font-size:12px;color:#3E4A4A;padding:2px 0">• ${t.Title} — ${t.PropertyName||"General"}${t.Notes?" · "+t.Notes:""}</div>`).join("")}
+            ${vB.map(t=>`<div style="display:flex;gap:8px;font-size:12px;color:#3E4A4A;padding:3px 0;border-bottom:1px solid rgba(196,75,59,0.1)">
+              <span style="color:#7A8585;white-space:nowrap;min-width:70px">${fD(actDate(t))}</span>
+              <span style="flex:1">• ${t.Title}</span>
+              <span style="color:#7A8585;text-align:right">${t.PropertyName||"General"}</span>
+              ${t.Notes?`<span style="color:#C44B3B;font-style:italic"> — ${t.Notes}</span>`:""}
+            </div>`).join("")}
           </div>`:""}
           ${vI.length?`<div style="margin-top:10px;padding:10px 14px;background:rgba(74,120,176,0.06);border-left:3px solid #4A78B0;border-radius:4px">
             <div style="font-size:12px;font-weight:600;color:#4A78B0;margin-bottom:6px">Incomplete (${vI.length})</div>
-            ${vI.map(t=>`<div style="font-size:12px;color:#3E4A4A;padding:2px 0">• ${t.Title} — ${t.PropertyName||"General"}</div>`).join("")}
+            ${vI.map(t=>`<div style="display:flex;gap:8px;font-size:12px;color:#3E4A4A;padding:3px 0;border-bottom:1px solid rgba(74,120,176,0.1)">
+              <span style="color:#7A8585;white-space:nowrap;min-width:70px">${fD(actDate(t))}</span>
+              <span style="flex:1">• ${t.Title}</span>
+              <span style="color:#7A8585;text-align:right">${t.PropertyName||"General"}</span>
+            </div>`).join("")}
+          </div>`:""}
+          ${vAbsences.length?`<div style="margin-top:10px;padding:10px 14px;background:rgba(212,150,10,0.06);border-left:3px solid #D4960A;border-radius:4px">
+            <div style="font-size:12px;font-weight:600;color:#D4960A;margin-bottom:6px">🛑 Absence Record (${vAbsences.length} day${vAbsences.length!==1?"s":""})</div>
+            ${vAbsences.map(a=>`<div style="display:flex;gap:8px;font-size:12px;color:#3E4A4A;padding:3px 0;border-bottom:1px solid rgba(212,150,10,0.1)">
+              <span style="color:#7A8585;white-space:nowrap;min-width:70px">${fD(actDate(a))}</span>
+              <span style="color:#D4960A;font-weight:600">Out</span>
+              ${a.MarkedByName?`<span style="color:#7A8585">· marked by ${a.MarkedByName}</span>`:""}
+            </div>`).join("")}
           </div>`:""}
         </div>
       </div>`).join("");
