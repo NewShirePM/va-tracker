@@ -1207,7 +1207,7 @@ function App(){
     const rateColor=(r)=>r>=85?"#2D8A5A":r>=60?"#D4960A":"#C44B3B";
     const rateBg=(r)=>r>=85?"rgba(45,138,90,0.1)":r>=60?"rgba(212,150,10,0.1)":"rgba(196,75,59,0.08)";
 
-    const vaCards=vaRows.map(({va,vT,vD,vB,vI,vSm,vTm,vR,vU,port,catList,propM})=>`
+    const vaCards=vaRows.map(({va,vT,vD,vB,vI,vSm,vTm,vR,vU,port,catList,propM,vAbsences})=>`
       <div style="background:#fff;border:1px solid #e8eaea;border-radius:8px;margin-bottom:20px;overflow:hidden;page-break-inside:avoid">
         <div style="background:#1C3740;padding:14px 20px;display:flex;justify-content:space-between;align-items:center">
           <div>
