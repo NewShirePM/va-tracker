@@ -1160,46 +1160,200 @@ function App(){
   }
 
   // ── Weekly Report ──
-  function generateWeeklyReport(){
+  function generateWeeklyReport(from, to, vaFilter=null){
     if(!data)return null;
-    const now=new Date();const mon=new Date(now);mon.setDate(mon.getDate()-(mon.getDay()+6)%7-7);mon.setHours(0,0,0,0);
-    const sun=new Date(mon);sun.setDate(sun.getDate()+6);sun.setHours(23,59,59,999);
-    const from=mon.toISOString().slice(0,10),to=sun.toISOString().slice(0,10);
-    const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(actDate(a),from,to));
-    const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(actDate(a),from,to));
+    const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(actDate(a),from,to)&&(!vaFilter||a.VAEmail?.toLowerCase()===vaFilter));
+    const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(actDate(a),from,to)&&(!vaFilter||a.VAEmail?.toLowerCase()===vaFilter));
     const done=tasks.filter(t=>t.Status==="Completed");
     const blocked=tasks.filter(t=>t.Status==="Blocked");
     const inc=tasks.filter(t=>t.Status==="Incomplete");
+    const rate=tasks.length?Math.round(done.length/tasks.length*100):0;
+    const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0);
+    const taskMin=done.reduce((s,t)=>s+(t.DurationMin||0),0);
+    const util=shiftMin>0?Math.round(taskMin/shiftMin*100):0;
 
-    let report=`VA PRODUCTIVITY TRACKER — WEEKLY REPORT\nNewShire Property Management\nWeek: ${fD(from)} – ${fD(to)}\nGenerated: ${new Date().toLocaleString()}\nPrepared by: Brandy Turner\n${"=".repeat(60)}\n\n`;
-    report+=`SUMMARY\n${"-".repeat(40)}\nTotal Tasks: ${tasks.length}\nCompleted: ${done.length} (${tasks.length?Math.round(done.length/tasks.length*100):0}%)\nBlocked: ${blocked.length}\nIncomplete: ${inc.length}\n\n`;
-
-    data.vas.forEach(va=>{
-      const vT=tasks.filter(t=>t.VAEmail===va.Email);const vD=vT.filter(t=>t.Status==="Completed");const vB=vT.filter(t=>t.Status==="Blocked");const vI=vT.filter(t=>t.Status==="Incomplete");
-      const vS=shifts.filter(s=>s.VAEmail===va.Email);const vSm=vS.reduce((s,a)=>s+(a.WorkMinutes||0),0);const vTm=vD.reduce((s,t)=>s+(t.DurationMin||0),0);
-      const vU=vSm>0?Math.round(vTm/vSm*100):0;const vR=vT.length?Math.round(vD.length/vT.length*100):0;
-      report+=`\n${"=".repeat(60)}\n${va.Name.toUpperCase()}${getVAStatus(va)==="Out"?" [OUT]":""}\n${"=".repeat(60)}\n`;
-      report+=`Tasks: ${vD.length}/${vT.length} completed (${vR}%)\nShift Time: ${fM(vSm)} | Task Time: ${fM(vTm)} | Utilization: ${vU}%\n`;
-      if(vB.length)report+=`\nBLOCKED (${vB.length}):\n${vB.map(t=>`  • ${t.Title} — ${t.PropertyName}${t.Notes?" — "+t.Notes:""}`).join("\n")}\n`;
-      if(vI.length)report+=`\nINCOMPLETE (${vI.length}):\n${vI.map(t=>`  • ${t.Title} — ${t.PropertyName}${t.Notes?" — "+t.Notes:""}`).join("\n")}\n`;
-
-      // Category breakdown
+    // Per-VA data
+    const vasToReport=vaFilter?data.vas.filter(v=>v.Email?.toLowerCase()===vaFilter):data.vas;
+    const vaRows=vasToReport.map(va=>{
+      const vT=tasks.filter(t=>t.VAEmail===va.Email);
+      const vD=vT.filter(t=>t.Status==="Completed");
+      const vB=vT.filter(t=>t.Status==="Blocked");
+      const vI=vT.filter(t=>t.Status==="Incomplete");
+      const vS=shifts.filter(s=>s.VAEmail===va.Email);
+      const vSm=vS.reduce((s,a)=>s+(a.WorkMinutes||0),0);
+      const vTm=vD.reduce((s,t)=>s+(t.DurationMin||0),0);
+      const vR=vT.length?Math.round(vD.length/vT.length*100):0;
+      const vU=vSm>0?Math.round(vTm/vSm*100):0;
+      const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===va.Email.toLowerCase());
       const catM={};vD.forEach(t=>{if(!catM[t.Category])catM[t.Category]={c:0,m:0};catM[t.Category].c++;catM[t.Category].m+=(t.DurationMin||0);});
-      const catL=Object.entries(catM).sort((a,b)=>b[1].m-a[1].m);
-      if(catL.length){report+=`\nTIME BY CATEGORY:\n${catL.map(([cat,d])=>`  ${cat}: ${d.c} tasks, ${fM(d.m)}`).join("\n")}\n`;}
-
-      // Property breakdown
-      const propM={};vT.forEach(t=>{const pn=t.PropertyName||"General";if(!propM[pn])propM[pn]={done:0,total:0};propM[pn].total++;if(t.Status==="Completed")propM[pn].done++;});
-      report+=`\nPROPERTY BREAKDOWN:\n${Object.entries(propM).map(([pn,d])=>`  ${pn}: ${d.done}/${d.total}`).join("\n")}\n`;
+      const catList=Object.entries(catM).sort((a,b)=>b[1].m-a[1].m);
+      const propM={};vT.forEach(t=>{const pn=t.PropertyName||"General";if(!propM[pn])propM[pn]={done:0,total:0,blocked:0};propM[pn].total++;if(t.Status==="Completed")propM[pn].done++;if(t.Status==="Blocked")propM[pn].blocked++;});
+      return{va,vT,vD,vB,vI,vSm,vTm,vR,vU,port,catList,propM};
     });
 
-    // Coverage summary
+    // Coverage
     const covTasks=tasks.filter(t=>t.CoverageForEmail);
-    if(covTasks.length)report+=`\n${"=".repeat(60)}\nCOVERAGE TASKS: ${covTasks.length}\n${covTasks.map(t=>`  ${t.VAName} covered for ${t.CoverageForName}: ${t.Title}`).join("\n")}\n`;
 
-    return{report,from,to};
+    // ── Build HTML ──
+    const pct=(v,max)=>`${Math.min(100,max>0?Math.round(v/max*100):0)}%`;
+    const bar=(v,max,color)=>`<div style="height:8px;background:#e8eaea;border-radius:4px;overflow:hidden;margin-top:4px"><div style="width:${pct(v,max)};height:100%;background:${color};border-radius:4px"></div></div>`;
+    const badge=(text,color,bg)=>`<span style="display:inline-block;padding:2px 10px;border-radius:99px;font-size:11px;font-weight:700;color:${color};background:${bg};text-transform:uppercase;letter-spacing:0.03em">${text}</span>`;
+    const rateColor=(r)=>r>=85?"#2D8A5A":r>=60?"#D4960A":"#C44B3B";
+    const rateBg=(r)=>r>=85?"rgba(45,138,90,0.1)":r>=60?"rgba(212,150,10,0.1)":"rgba(196,75,59,0.08)";
+
+    const vaCards=vaRows.map(({va,vT,vD,vB,vI,vSm,vTm,vR,vU,port,catList,propM})=>`
+      <div style="background:#fff;border:1px solid #e8eaea;border-radius:8px;margin-bottom:20px;overflow:hidden;page-break-inside:avoid">
+        <div style="background:#1C3740;padding:14px 20px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="color:#fff;font-size:17px;font-weight:700">${va.Name}</div>
+            <div style="color:#CDA04B;font-size:11px;margin-top:2px">${port.length} properties assigned</div>
+          </div>
+          <div style="text-align:right">
+            ${badge(vR+"% completion",rateColor(vR),rateBg(vR))}
+          </div>
+        </div>
+        <div style="padding:16px 20px">
+          <!-- KPI row -->
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+            ${[
+              {l:"Tasks Done",v:`${vD.length} / ${vT.length}`,c:"#28434C"},
+              {l:"Shift Time",v:fM(vSm),c:"#28434C"},
+              {l:"Task Time",v:fM(vTm),c:"#28434C"},
+              {l:"Utilization",v:vU+"%",c:vU>=75?"#2D8A5A":vU>=50?"#D4960A":vSm>0?"#C44B3B":"#28434C"},
+            ].map(k=>`<div style="background:#f7f8f7;border-radius:6px;padding:10px 12px;text-align:center">
+              <div style="font-size:11px;color:#7A8585;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">${k.l}</div>
+              <div style="font-size:22px;font-weight:700;color:${k.c};font-family:monospace">${k.v}</div>
+            </div>`).join("")}
+          </div>
+          <!-- Completion bar -->
+          <div style="margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:#7A8585;margin-bottom:4px">
+              <span>Completion Rate</span><span style="font-weight:600;color:${rateColor(vR)}">${vR}%</span>
+            </div>
+            ${bar(vD.length,vT.length,rateColor(vR))}
+          </div>
+          <!-- 2-col: categories + properties -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <div style="font-size:12px;font-weight:600;color:#28434C;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em">Time by Category</div>
+              ${catList.length?catList.slice(0,6).map(([cat,d])=>`
+                <div style="margin-bottom:8px">
+                  <div style="display:flex;justify-content:space-between;font-size:12px;color:#3E4A4A"><span>${cat}</span><span style="font-weight:600">${fM(d.m)}</span></div>
+                  ${bar(d.m,vTm||1,"#CDA04B")}
+                </div>`).join(""):`<div style="font-size:12px;color:#A8B0B0;font-style:italic">No completed tasks</div>`}
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:600;color:#28434C;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em">Property Summary</div>
+              ${Object.entries(propM).sort((a,b)=>b[1].total-a[1].total).map(([pn,d])=>`
+                <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:12px">
+                  <span style="color:${d.done===d.total&&d.total>0?"#2D8A5A":d.blocked>0?"#C44B3B":"#7A8585"};font-size:14px">${d.done===d.total&&d.total>0?"✓":d.blocked>0?"⚠":"·"}</span>
+                  <span style="flex:1;color:#3E4A4A">${pn}</span>
+                  <span style="color:#7A8585">${d.done}/${d.total}</span>
+                </div>`).join("")}
+            </div>
+          </div>
+          ${vB.length?`<div style="margin-top:14px;padding:10px 14px;background:rgba(196,75,59,0.06);border-left:3px solid #C44B3B;border-radius:4px">
+            <div style="font-size:12px;font-weight:600;color:#C44B3B;margin-bottom:6px">⚠ Blocked Tasks (${vB.length})</div>
+            ${vB.map(t=>`<div style="font-size:12px;color:#3E4A4A;padding:2px 0">• ${t.Title} — ${t.PropertyName||"General"}${t.Notes?" · "+t.Notes:""}</div>`).join("")}
+          </div>`:""}
+          ${vI.length?`<div style="margin-top:10px;padding:10px 14px;background:rgba(74,120,176,0.06);border-left:3px solid #4A78B0;border-radius:4px">
+            <div style="font-size:12px;font-weight:600;color:#4A78B0;margin-bottom:6px">Incomplete (${vI.length})</div>
+            ${vI.map(t=>`<div style="font-size:12px;color:#3E4A4A;padding:2px 0">• ${t.Title} — ${t.PropertyName||"General"}</div>`).join("")}
+          </div>`:""}
+        </div>
+      </div>`).join("");
+
+    const reportTitle=vaFilter?(vasToReport[0]?.Name||vaFilter)+" — Performance Report":"VA Performance Report";
+    const html=`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>${reportTitle} — ${fD(from)} to ${fD(to)}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#f7f8f7;color:#1A2A30;padding:0}
+  @media print{body{background:#fff}.no-print{display:none!important}@page{margin:0.6in}}
+</style>
+</head>
+<body>
+<!-- Header -->
+<div style="background:#1C3740;padding:24px 40px;border-bottom:4px solid #CDA04B">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end">
+    <div>
+      <div style="color:#CDA04B;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:6px">NewShire Property Management</div>
+      <div style="color:#fff;font-size:26px;font-weight:700;letter-spacing:0.02em">${reportTitle}</div>
+      <div style="color:#4A7E91;font-size:14px;margin-top:4px">${fD(from)} &ndash; ${fD(to)}</div>
+    </div>
+    <div style="text-align:right">
+      <div style="color:#7A8585;font-size:11px">Prepared by</div>
+      <div style="color:#fff;font-size:14px;font-weight:600">Brandy Turner</div>
+      <div style="color:#7A8585;font-size:11px;margin-top:2px">Generated ${new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}</div>
+    </div>
+  </div>
+</div>
+
+<div style="max-width:900px;margin:0 auto;padding:30px 40px">
+
+<!-- Print button -->
+<div class="no-print" style="text-align:right;margin-bottom:20px">
+  <button onclick="window.print()" style="background:#1C3740;color:#fff;border:none;padding:10px 20px;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer">🖨 Print / Save as PDF</button>
+</div>
+
+<!-- Summary KPIs -->
+<div style="background:#fff;border:1px solid #e8eaea;border-radius:8px;padding:20px;margin-bottom:24px">
+  <div style="font-size:14px;font-weight:700;color:#28434C;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px">Period Summary</div>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
+    ${[
+      {l:"Total Tasks",v:tasks.length,c:"#28434C"},
+      {l:"Completed",v:done.length,c:"#2D8A5A"},
+      {l:"Completion Rate",v:rate+"%",c:rateColor(rate)},
+      {l:"Blocked",v:blocked.length,c:blocked.length>0?"#C44B3B":"#2D8A5A"},
+      {l:"Incomplete",v:inc.length,c:inc.length>0?"#4A78B0":"#2D8A5A"},
+    ].map(k=>`<div style="text-align:center;padding:14px 8px;background:#f7f8f7;border-radius:6px">
+      <div style="font-size:11px;color:#7A8585;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">${k.l}</div>
+      <div style="font-size:28px;font-weight:700;color:${k.c};font-family:monospace">${k.v}</div>
+    </div>`).join("")}
+  </div>
+  ${shiftMin>0?`<div style="margin-top:14px;padding-top:14px;border-top:1px solid #f0f0f0;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+    ${[
+      {l:"Total Shift Hours",v:fM(shiftMin)},
+      {l:"Total Task Hours",v:fM(taskMin)},
+      {l:"Overall Utilization",v:util+"%"},
+    ].map(k=>`<div style="text-align:center;padding:10px;background:#EDF4F7;border-radius:6px">
+      <div style="font-size:11px;color:#3A6577;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">${k.l}</div>
+      <div style="font-size:20px;font-weight:700;color:#28434C;font-family:monospace">${k.v}</div>
+    </div>`).join("")}
+  </div>`:""}
+</div>
+
+<!-- VA Cards -->
+<div style="font-size:14px;font-weight:700;color:#28434C;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:14px">Individual Performance</div>
+${vaCards}
+
+${covTasks.length?`<!-- Coverage -->
+<div style="background:#fff;border:1px solid #e8eaea;border-radius:8px;padding:20px;margin-bottom:20px;page-break-inside:avoid">
+  <div style="font-size:14px;font-weight:700;color:#28434C;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Coverage Summary (${covTasks.length} tasks)</div>
+  ${covTasks.map(t=>`<div style="display:flex;gap:12px;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px">
+    <span style="color:#D4960A;font-weight:600">${t.VAName}</span>
+    <span style="color:#7A8585">covered for</span>
+    <span style="color:#3E4A4A">${t.CoverageForName}</span>
+    <span style="color:#7A8585;flex:1;text-align:right">${t.Title}</span>
+  </div>`).join("")}
+</div>`:""}
+
+<!-- Footer -->
+<div style="text-align:center;padding:20px 0;color:#A8B0B0;font-size:11px;border-top:1px solid #e8eaea;margin-top:10px">
+  NewShire Property Management &nbsp;·&nbsp; VA Performance Report &nbsp;·&nbsp; ${fD(from)} – ${fD(to)}<br/>
+  This report is confidential and intended for internal use only.
+</div>
+
+</div>
+</body>
+</html>`;
+    return{html,from,to};
   }
 
+  
   // ── Config update ──
   async function updateConfig(nc){
     try{const t=await gT();const ci=await gAll(t,`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`);
@@ -2328,6 +2482,9 @@ function BackdatePanel({data,onBackdate}){
 function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecoverTasks,onAssignTask,onAddGroupedTasks,onCloseDay,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeactivateProperty,onDeleteTask,onCompleteSubTask,generateReport,onAddGuest,onUpdateGuest,onDeactivateGuest,onCleanup,onBackdate,onAdminClockIn,onAddBackdatedShift,onClosePastDays,onConfirmClosePastDays,onResolveBlocked}){
   const[showAssign,setShowAssign]=useState(false);
   const[staleTasks,setStaleTasks]=useState(null);
+  const[rptFrom,setRptFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-(d.getDay()+6)%7-7);return d.toISOString().slice(0,10);});
+  const[rptTo,setRptTo]=useState(()=>{const d=new Date();d.setDate(d.getDate()-(d.getDay()+6)%7-7);const s=new Date(d);s.setDate(s.getDate()+6);return s.toISOString().slice(0,10);});
+  const[rptVA,setRptVA]=useState("all");
   const[bsVa,setBsVa]=useState("");const[bsIn,setBsIn]=useState("");const[bsOut,setBsOut]=useState("");const[bsBreak,setBsBreak]=useState("0");
   const[adminCiVa,setAdminCiVa]=useState("");
   const[adminCiTime,setAdminCiTime]=useState(()=>{const d=new Date();d.setSeconds(0,0);return d.toISOString().slice(0,16);});const[staleNotes,setStaleNotes]=useState("Closed retroactively");
@@ -2686,23 +2843,42 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onRecove
     {/* Data Sources */}
     <div style={{...S.card,padding:12,background:C.teal50,border:`1px solid ${C.teal100}`}}><div style={{fontSize:12,color:C.teal600}}><strong>Data:</strong> Employees → VAs/PMs/Roles. VA_Properties → property registry. VA_Portfolios → assignments. VA_TrackerConfig → categories/recurring/settings. VA_Activity → tasks/shifts/absences. VA_Guests → guest access. Auth: MSAL + Azure B2B.</div></div>
 
-    {/* Weekly Report */}
+    {/* Performance Report */}
     <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:10}}>
-        <div><div style={{fontSize:16,fontWeight:600,color:C.teal700}}>{"\u{1F4CA}"} Weekly Report</div><div style={{fontSize:12,color:C.gray400}}>Previous week's performance summary</div></div>
-        <button style={S.btn(C.headerBg)} onClick={()=>{
-          const r=generateReport();if(!r)return;
-          const blob=new Blob([r.report],{type:"text/plain"});
-          const url=URL.createObjectURL(blob);const a=document.createElement("a");
-          a.href=url;a.download=`VA-Weekly-Report-${r.from}-to-${r.to}.txt`;a.click();URL.revokeObjectURL(url);
-        }}>{"\u{1F4E5}"} Download Report</button>
+      <div style={{paddingBottom:10,borderBottom:`1px solid ${C.gray100}`,marginBottom:14}}>
+        <div style={{fontSize:16,fontWeight:600,color:C.teal700,marginBottom:2}}>{"\u{1F4CA}"} Performance Report</div>
+        <div style={{fontSize:12,color:C.gray400}}>Visual report — printable or saveable as PDF</div>
       </div>
-      <button style={{...S.btnO(C.teal600,C.teal100),width:"100%"}} onClick={()=>{
-        const r=generateReport();if(!r)return;
-        const w=window.open("","_blank","width=800,height=600");
-        w.document.write(`<pre style="font-family:Consolas,monospace;font-size:13px;padding:20px;white-space:pre-wrap;">${r.report.replace(/</g,"&lt;")}</pre>`);
+      <div style={{display:"flex",gap:12,alignItems:"flex-end",flexWrap:"wrap",marginBottom:14}}>
+        <div><label style={S.label}>From</label><input type="date" style={{...S.input,width:150}} value={rptFrom} onChange={e=>setRptFrom(e.target.value)}/></div>
+        <div><label style={S.label}>To</label><input type="date" style={{...S.input,width:150}} value={rptTo} onChange={e=>setRptTo(e.target.value)}/></div>
+        <div><label style={S.label}>VA</label><select style={{...S.select,width:160}} value={rptVA} onChange={e=>setRptVA(e.target.value)}><option value="all">All VAs</option>{data.vas.map(v=><option key={v.Email} value={v.Email.toLowerCase()}>{v.Name}</option>)}</select></div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {[{l:"This Week",d:0},{l:"Last Week",d:1},{l:"Last 14d",d:14},{l:"Last 30d",d:30},{l:"Last 90d",d:90}].map(p=>(
+            <button key={p.l} style={{...S.btnO(C.teal600,C.teal100),...S.btnSm}} onClick={()=>{
+              const to=new Date();
+              if(p.d===0){
+                const mon=new Date(to);mon.setDate(mon.getDate()-(mon.getDay()+6)%7);mon.setHours(0,0,0,0);
+                setRptFrom(mon.toISOString().slice(0,10));setRptTo(today());
+              } else if(p.d===1){
+                const mon=new Date(to);mon.setDate(mon.getDate()-(mon.getDay()+6)%7-7);mon.setHours(0,0,0,0);
+                const sun=new Date(mon);sun.setDate(sun.getDate()+6);
+                setRptFrom(mon.toISOString().slice(0,10));setRptTo(sun.toISOString().slice(0,10));
+              } else {
+                const f=new Date(to);f.setDate(f.getDate()-p.d);
+                setRptFrom(f.toISOString().slice(0,10));setRptTo(today());
+              }
+            }}>{p.l}</button>
+          ))}
+        </div>
+      </div>
+      <button style={{...S.btn(C.headerBg),width:"100%"}} onClick={()=>{
+        const r=generateReport(rptFrom,rptTo,rptVA==="all"?null:rptVA);if(!r)return;
+        const w=window.open("","_blank","width=1000,height=800");
+        w.document.write(r.html);
         w.document.title=`VA Report ${r.from} to ${r.to}`;
-      }}>Preview Report</button>
+        w.document.close();
+      }}>{"\u{1F4CA}"} Open Report</button>
     </div>
 
     {/* Queued Task Management */}
