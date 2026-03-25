@@ -313,7 +313,7 @@ function App(){
   const[myEmp,setMyEmp]=useState(null);
   const[viewAs,setViewAs]=useState(null); // {role,email,name} — admin preview mode
   const[flash,setFlash]=useState("");const[lastSync,setLastSync]=useState(null);const[syncing,setSyncing]=useState(false);
-  const[timers,setTimers]=useState([]);
+  const[timers,setTimers]=useState([]);const timersRef=useRef([]);useEffect(()=>{timersRef.current=timers;},[timers]);
   const timersRef=useRef([]);
   useEffect(()=>{timersRef.current=timers;},[timers]);
   const[shift,setShift]=useState(()=>{
@@ -347,7 +347,7 @@ function App(){
         if(!tk)return;
         const d=await loadAll(tk);
         setData(d);
-        buildQueue(d,myEmail);
+        buildQueue(d,myEmail,timersRef.current);
         setLastSync(Date.now());
       }catch(e){console.warn("[VT] Poll error:",e);}
       finally{setSyncing(false);}
@@ -406,9 +406,9 @@ function App(){
     }).catch(e=>{console.error("[VT] Load error:",e);setError("load_error: "+e.message);setLoading(false);});
   },[token,acct]);
 
-  function buildQueue(d,email){
+  function buildQueue(d,email,currentTimers=[]){
     // 1. Load all persisted Queued tasks from VA_Activity
-    const persistedQueued=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&(a.Status==="Queued"||a.Status==="In Progress"));
+    const persistedQueued=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&a.Status==="Queued");const persistedInProgress=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&a.Status==="In Progress");const timerSpIds=new Set(currentTimers.map(t=>t._spId).filter(Boolean));const restoredTimers=persistedInProgress.filter(a=>!timerSpIds.has(a.id)).map(a=>({...a,_localId:a.id,_spId:a.id,_pMs:(a.PausedMin||0)*60000,_pS:null}));if(restoredTimers.length>0){setTimers(prev=>{const existingIds=new Set(prev.map(t=>t._spId));const fresh=restoredTimers.filter(t=>!existingIds.has(t._spId));if(!fresh.length)return prev;console.log("[VT] Restored "+fresh.length+" in-progress timer(s)");return[...prev,...fresh];});}
     const q=[],cv=[],tm=[];
     
     persistedQueued.forEach(a=>{
@@ -534,7 +534,7 @@ function App(){
     }
   }
 
-  async function reload(){const t=await gT();const d=await loadAll(t);setData(d);buildQueue(d,myEmail);return d;}
+  async function reload(){const t=await gT();const d=await loadAll(t);setData(d);buildQueue(d,myEmail,timersRef.current);return d;}
 
   // ── Save task to SharePoint ──
   async function saveTask(task){
@@ -643,7 +643,7 @@ function App(){
     const now=new Date().toISOString();
     const timer={...task,Status:"In Progress",StartTime:now,_pMs:0,_pS:null};
     const tk=await gT();
-    if(task._spId){try{await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:"In Progress",StartTime:now});}catch(e){console.warn("[VT] Timer start patch failed:",e);}}
+    if(task._spId){try{await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:"In Progress",StartTime:now});}catch(e){console.error("[VT] Timer start patch failed:",e);fl("⚠️ Could not start timer — connection issue. Please try again.");return;}}
     // If grouped, remove ALL siblings from queue (they're represented by the single group timer)
     if(task.GroupId){
       setQueue(p=>p.filter(t=>t.GroupId!==task.GroupId));
@@ -689,7 +689,7 @@ function App(){
       try{const paused=JSON.parse(localStorage.getItem("va_paused_timers")||"{}");delete paused[id];localStorage.setItem("va_paused_timers",JSON.stringify(paused));}catch(e){}
       // If this was a group timer, also finish all remaining queued sub-tasks
       if(t.GroupId){await finishGroupTimer(t.GroupId,status,notes,rawMs,pMs);}
-      else{fl(status==="Completed"?"Task completed!":"Task: "+status);await reload();}
+      else{fl(status==="Completed"?"Task completed!":"Task: "+status);await new Promise(resolve=>setTimeout(resolve,1500));await reload();}
     }catch(e){fl("Error: "+e.message);}
   }
   async function cancelTimer(id){
