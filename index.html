@@ -313,7 +313,7 @@ function App(){
   const[myEmp,setMyEmp]=useState(null);
   const[viewAs,setViewAs]=useState(null); // {role,email,name} — admin preview mode
   const[flash,setFlash]=useState("");const[lastSync,setLastSync]=useState(null);const[syncing,setSyncing]=useState(false);
-  const[timers,setTimers]=useState([]);const timersRef=useRef([]);useEffect(()=>{timersRef.current=timers;},[timers]);
+  const[timers,setTimers]=useState([]);
   const timersRef=useRef([]);
   useEffect(()=>{timersRef.current=timers;},[timers]);
   const[shift,setShift]=useState(()=>{
@@ -347,7 +347,7 @@ function App(){
         if(!tk)return;
         const d=await loadAll(tk);
         setData(d);
-        buildQueue(d,myEmail,timersRef.current);
+        buildQueue(d,myEmail);
         setLastSync(Date.now());
       }catch(e){console.warn("[VT] Poll error:",e);}
       finally{setSyncing(false);}
@@ -401,14 +401,14 @@ function App(){
         if(gRec){setRole("guest");setMyGuest(gRec);setError(null);}
         else{setRole(null);setError("access_denied");}
       }
-      buildQueue(d,email);
+      buildQueue(d,email,timersRef.current);
       setLoading(false);
     }).catch(e=>{console.error("[VT] Load error:",e);setError("load_error: "+e.message);setLoading(false);});
   },[token,acct]);
 
   function buildQueue(d,email,currentTimers=[]){
     // 1. Load all persisted Queued tasks from VA_Activity
-    const persistedQueued=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&a.Status==="Queued");const persistedInProgress=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&a.Status==="In Progress");const timerSpIds=new Set(currentTimers.map(t=>t._spId).filter(Boolean));const restoredTimers=persistedInProgress.filter(a=>!timerSpIds.has(a.id)).map(a=>({...a,_localId:a.id,_spId:a.id,_pMs:(a.PausedMin||0)*60000,_pS:null}));if(restoredTimers.length>0){setTimers(prev=>{const existingIds=new Set(prev.map(t=>t._spId));const fresh=restoredTimers.filter(t=>!existingIds.has(t._spId));if(!fresh.length)return prev;console.log("[VT] Restored "+fresh.length+" in-progress timer(s)");return[...prev,...fresh];});}
+    const persistedQueued=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&a.Status==="Queued");const persistedInProgress=d.activities.filter(a=>(a.ActivityType==="Task"||a.ActivityType0==="Task")&&a.Status==="In Progress");const timerSpIds=new Set(currentTimers.map(t=>t._spId).filter(Boolean));const restoredTimers=persistedInProgress.filter(a=>!timerSpIds.has(a.id)).map(a=>({...a,_localId:a.id,_spId:a.id,_pMs:(a.PausedMin||0)*60000,_pS:null}));if(restoredTimers.length>0){setTimers(prev=>{const existingIds=new Set(prev.map(t=>t._spId));const fresh=restoredTimers.filter(t=>!existingIds.has(t._spId));if(!fresh.length)return prev;return[...prev,...fresh];});}
     const q=[],cv=[],tm=[];
     
     persistedQueued.forEach(a=>{
@@ -643,7 +643,7 @@ function App(){
     const now=new Date().toISOString();
     const timer={...task,Status:"In Progress",StartTime:now,_pMs:0,_pS:null};
     const tk=await gT();
-    if(task._spId){try{await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:"In Progress",StartTime:now});}catch(e){console.error("[VT] Timer start patch failed:",e);fl("⚠️ Could not start timer — connection issue. Please try again.");return;}}
+    if(task._spId){try{await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:"In Progress",StartTime:now});}catch(e){console.error("[VT] Timer start patch failed:",e);fl("Could not start timer - connection issue. Please try again.");return;}}
     // If grouped, remove ALL siblings from queue (they're represented by the single group timer)
     if(task.GroupId){
       setQueue(p=>p.filter(t=>t.GroupId!==task.GroupId));
@@ -1530,7 +1530,7 @@ ${covTasks.length?`<!-- Coverage -->
               {syncing?"Syncing…":`Updated ${Math.round((Date.now()-lastSync)/1000)}s ago`}
             </div>}
           </div>
-          <button title="Refresh now" style={{background:"none",border:`1px solid ${C.teal600}`,borderRadius:4,color:C.teal100,fontSize:13,cursor:"pointer",padding:"4px 8px",display:"flex",alignItems:"center",gap:4}} onClick={async()=>{setSyncing(true);try{const tk=await refresh();if(tk){const d=await loadAll(tk);setData(d);buildQueue(d,myEmail);setLastSync(Date.now());}}finally{setSyncing(false);}}}>
+          <button title="Refresh now" style={{background:"none",border:`1px solid ${C.teal600}`,borderRadius:4,color:C.teal100,fontSize:13,cursor:"pointer",padding:"4px 8px",display:"flex",alignItems:"center",gap:4}} onClick={async()=>{setSyncing(true);try{const tk=await refresh();if(tk){const d=await loadAll(tk);setData(d);buildQueue(d,myEmail,timersRef.current);setLastSync(Date.now());}}finally{setSyncing(false);}}}>
             <span style={{display:"inline-block",transition:"transform 0.4s",transform:syncing?"rotate(360deg)":"rotate(0deg)"}}>↻</span>
           </button>
         </div>
