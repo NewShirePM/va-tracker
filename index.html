@@ -22,12 +22,47 @@
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel" data-presets="react" src="va-tracker-v3.jsx"></script>
-  <script>
-    window.addEventListener('load', () => {
-      const root = ReactDOM.createRoot(document.getElementById('root'));
-      root.render(React.createElement(App));
-    });
+<!DOCTYPE html>
+  <html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>VA Productivity Tracker -- NewShire</title>
+      <meta name="theme-color" content="#1C3740" />
+      <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+      <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+      <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+      <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body { font-family: 'DM Sans', 'Segoe UI', system-ui, sans-serif; background: #EDEEF0; }
+            #root { min-height: 100vh; }
+          </style>
+    </head>
+    <body>
+        <div id="root"></div>div>
+        <script>
+              (async function() {
+                      try {
+                                const r = await fetch('va-tracker-v3.jsx');
+                                let code = await r.text();
+                                code = code.replace(
+                                            'import{useState,useEffect,useCallback,useRef}from"react";',
+                                            'const {useState,useEffect,useCallback,useRef}=React;'
+                                          );
+                                code = code.replace('export default function App()', 'function App()');
+                                const out = Babel.transform(code, { presets: ['react'] }).code;
+                                eval(out);
+                                ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+                      } catch(e) {
+                                document.getElementById('root').innerHTML =
+                                            '<div style="padding:40px;color:#B83B2A;font-family:sans-serif"><h2>App failed to load</h2><pre style="margin-top:12px;font-size:12px">' + e.message + '</pre></div>';
+                      }
+              })();
+        </script>
+    </body>
+  </html>
+      </style></title>
+    </head>
   </script>
 </body>
 </html>
