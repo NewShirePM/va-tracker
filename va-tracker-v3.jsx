@@ -207,7 +207,9 @@ function App(){
 
   function buildQueue(d,email,currentTimers=[]){
     const timerSpIds=new Set(currentTimers.map(t=>t._spId).filter(Boolean));
-    const persistedQueued=d.activities.filter(a=>a.ActivityType==="Task"&&a.Status==="Queued"&&!timerSpIds.has(a.id));
+    const td=today();
+    // Only load TODAY's queued tasks into the active queue — older ones show in overdue section only
+    const persistedQueued=d.activities.filter(a=>a.ActivityType==="Task"&&a.Status==="Queued"&&!timerSpIds.has(a.id)&&(a.ActivityDate?.slice(0,10)===td||!a.ActivityDate));
     const persistedInProgress=d.activities.filter(a=>a.ActivityType==="Task"&&a.Status==="In Progress"&&!timerSpIds.has(a.id));
     const q=[],cv=[];
     persistedQueued.forEach(a=>{
@@ -418,15 +420,12 @@ function App(){
     await gPatch(t,iUrl("Employees",va.id),{VATrackerStatus:ns});
     if(ns==="Out"){
       await gPost(t,lUrl("VA_Activity"),{Title:`${va.Name}-Out-${today()}`,ActivityType:"Absence",VAEmail:va.Email,VAName:va.Name,ActivityDate:new Date().toISOString(),StartTime:new Date().toISOString(),Status:"Out",MarkedByEmail:myEmail,MarkedByName:acct.name||myEmail});
-      // Only move TODAY's queued tasks to coverage — old tasks are overdue, not coverage
-      const td=today();
-      const mv=queue.filter(q=>q.VAEmail.toLowerCase()===va.Email.toLowerCase()&&(q.ActivityDate?.slice(0,10)===td||!q.ActivityDate));
-      const stale=queue.filter(q=>q.VAEmail.toLowerCase()===va.Email.toLowerCase()&&q.ActivityDate?.slice(0,10)<td);
+      // Only move today's queued tasks to coverage
+      const mv=queue.filter(q=>q.VAEmail.toLowerCase()===va.Email.toLowerCase());
       for(const task of mv){if(task._spId){try{await gPatch(t,iUrl("VA_Activity",task._spId),{Source:"Coverage",CoverageForEmail:va.Email,CoverageForName:va.Name});}catch(e){}}}
       const rest=queue.filter(q=>q.VAEmail.toLowerCase()!==va.Email.toLowerCase());
       mv.forEach(q=>{q.Source="Coverage";q.CoverageForEmail=va.Email;q.CoverageForName=va.Name;});
-      setQueue([...rest,...stale]);setCovQ(p=>[...p,...mv]);fl(`${va.Name} marked OUT — ${mv.length} tasks to coverage${stale.length>0?` (${stale.length} overdue tasks unchanged)`:""}`);
-    }else{
+      setQueue(rest);setCovQ(p=>[...p,...mv]);fl(`${va.Name} marked OUT — ${mv.length} tasks to coverage`);    }else{
       const returning=covQ.filter(q=>q.CoverageForEmail?.toLowerCase()===va.Email.toLowerCase());
       for(const task of returning){if(task._spId){try{await gPatch(t,iUrl("VA_Activity",task._spId),{Source:"Daily",VAEmail:va.Email,VAName:va.Name,CoverageForEmail:"",CoverageForName:""});}catch(e){}}}
       returning.forEach(q=>{q.Source="Daily";q.CoverageForEmail="";q.CoverageForName="";q.VAEmail=va.Email;q.VAName=va.Name;});
@@ -951,7 +950,7 @@ function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAd
         <div style={{...ss.cardT,color:C.pu}}>⚑ Needs Your Review — {pendingReviews.length} item{pendingReviews.length!==1?"s":""}</div>
         <div style={ss.cardS}>VAs flagged these tasks and are waiting on your response</div>
       </div>
-      {pendingReviews.map((r,i)=>{const isRes=resId===r.id;
+      {pendingReviews.map((r,i)=>{
         // Find all reviews in this thread (same GroupId)
         const thread=r.GroupId?data.activities.filter(a=>(a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")&&a.GroupId===r.GroupId).sort((a,b)=>(a.ActivityDate||"").localeCompare(b.ActivityDate||"")):[];
         return<div key={i} style={{padding:"12px 14px",borderBottom:`1px solid ${C.b1}`}}>
