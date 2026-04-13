@@ -12,7 +12,7 @@ const CONFIG={
 };
 const GRAPH="https://graph.microsoft.com/v1.0";
 const SITE=`${GRAPH}/sites/${CONFIG.siteId}`;
-const SCOPES=["Sites.ReadWrite.All","User.Read"];
+const SCOPES=["Sites.ReadWrite.All","User.Read","Mail.Send"];
 
 // ── ROLE DETECTION ──
 const ROLE_MAP={"Virtual Assistant":"va","Property Manager":"manager","Regional/Portfolio Manager":"regional","Owner/Operator":"admin"};
@@ -45,6 +45,11 @@ async function gPost(token,url,fields){const r=await fetch(url,{method:"POST",he
 async function gPatch(token,url,fields){const r=await fetch(url,{method:"PATCH",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(fields)});if(!r.ok)throw new Error(`PATCH ${r.status}`);return r.json();}
 function lUrl(n){return`${SITE}/lists/${n}/items`;}
 function iUrl(n,id){return`${SITE}/lists/${n}/items/${id}/fields`;}
+async function sendEmail(token,to,subject,body){
+  try{await fetch("https://graph.microsoft.com/v1.0/me/sendMail",{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify({message:{subject,body:{contentType:"Text",content:body},toRecipients:[{emailAddress:{address:to}}]},saveToSentItems:false})});
+  }catch(e){console.warn("[VT] Email failed:",e.message);}
+}
+
 async function safeGet(token,name,url){try{const r=await gAll(token,url);return r;}catch(e){console.warn(`[VT] ${name} failed:`,e.message);return[];}}
 
 async function loadAll(token){
@@ -63,7 +68,7 @@ async function loadAll(token){
   const allActs=aR.map(a=>({id:a.id,...a.fields}));
   // Filter out activity before dataStartDate (if set in config)
   const cutoff=config.dataStartDate||null;
-  const activities=cutoff?allActs.filter(a=>{const d=a.ActivityDate||a.StartTime||"";return d>=cutoff;}):allActs;
+  const activities=(cutoff?allActs.filter(a=>{const d=a.ActivityDate||a.StartTime||"";return d>=cutoff;}):allActs).filter(a=>a.Status!=="Deleted");
   const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant"&&e.EmployeeActive!==false);
   const guests=gR.map(g=>({id:g.id,...g.fields})).filter(g=>g.IsActive!==false);
   const pms=employees.filter(e=>(e.JobTitle==="Property Manager"||e.JobTitle==="Regional/Portfolio Manager"||e.JobTitle==="Owner/Operator")&&e.EmployeeActive!==false);
@@ -282,26 +287,65 @@ function App(){
     try{const tk=await gT();await gPatch(tk,iUrl("VA_Guests",id),{IsActive:false});await reload();fl(`${name} deactivated`);}catch(e){fl("Error: "+e.message);}
   }
 
+  // ── Shift management ──
+  async function editShift(shiftId,fields){
+    try{const tk=await gT();
+      // Recalculate WorkMinutes if times changed
+      if(fields.StartTime&&fields.EndTime){
+        const bMin=fields.BreakMinutes||0;
+        fields.WorkMinutes=Math.max(0,Math.round((new Date(fields.EndTime)-new Date(fields.StartTime))/6e4)-bMin);
+      }
+      await gPatch(tk,iUrl("VA_Activity",shiftId),fields);await reload();fl("Shift updated!");
+    }catch(e){fl("Error: "+e.message);}
+  }
+  async function deleteShift(shiftId){
+    if(!window.confirm("Delete this shift record? This cannot be undone."))return;
+    try{const tk=await gT();
+      // Mark as deleted rather than actual delete (preserves audit trail)
+      await gPatch(tk,iUrl("VA_Activity",shiftId),{Status:"Deleted",Notes:"Deleted by admin"});
+      await reload();fl("Shift deleted!");
+    }catch(e){fl("Error: "+e.message);}
+  }
+
   // ── Review request (VA → Manager) ──
   async function sendReview(task,note){
     try{const tk=await gT();
-      await gPost(tk,lUrl("VA_Activity"),{Title:`Review-${task.Title}`,ActivityType:"Review",VAEmail:task.VAEmail||myEmail,VAName:task.VAName||myEmp?.Name||myEmail,ActivityDate:new Date().toISOString(),PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category||"",Notes:note,Status:"Pending",AssignedByEmail:myEmail,AssignedByName:myEmp?.Name||myEmail,GroupId:task._spId||task._localId||task.Title});
-      fl("Review request sent to PM!");await reload();
+      const groupId=task._spId||task._localId||task.Title;
+      await gPost(tk,lUrl("VA_Activity"),{Title:`Review-${task.Title}`,ActivityType:"Review",VAEmail:task.VAEmail||myEmail,VAName:task.VAName||myEmp?.Name||myEmail,ActivityDate:new Date().toISOString(),PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category||"",Notes:note,Status:"Pending",AssignedByEmail:myEmail,AssignedByName:myEmp?.Name||myEmail,GroupId:groupId});
+      // Email the PM
+      const prop=data.properties.find(p=>p.Title===task.PropertyId);
+      const pmEmail=prop?.PMEmail||task.PMEmail;
+      if(pmEmail){
+        await sendEmail(tk,pmEmail,`VA Review Request: ${task.Title} — ${task.PropertyName||""}`,
+          `${myEmp?.Name||myEmail} needs your review on "${task.Title}" for ${task.PropertyName||"a property"}.\n\n"${note}"\n\nRespond in the VA Tracker: https://newshirepm.github.io/va-tracker/`);
+      }
+      fl("Review sent to PM"+(pmEmail?" — email notification sent":"")+"!");await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+  // Reply to a review (works for both VA and PM — creates a response and toggles status)
+  async function replyToReview(reviewId,note,newStatus){
+    try{const tk=await gT();
+      const orig=data.activities.find(a=>a.id===reviewId);if(!orig)return;
+      // Create response record
+      await gPost(tk,lUrl("VA_Activity"),{Title:`Response-${orig.Title||"Review"}`,ActivityType:"ReviewResponse",VAEmail:orig.VAEmail,VAName:orig.VAName,ActivityDate:new Date().toISOString(),PropertyId:orig.PropertyId||"",PropertyName:orig.PropertyName||"General",PMName:orig.PMName||"",Category:orig.Category||"",Notes:note,Status:"Completed",GroupId:orig.GroupId||"",AssignedByEmail:myEmail,AssignedByName:myEmp?.Name||acct?.name||myEmail});
+      // Update review status
+      await gPatch(tk,iUrl("VA_Activity",reviewId),{Status:newStatus||"Responded"});
+      // Email notification to the other party
+      const iAmVA=orig.VAEmail?.toLowerCase()===myEmail;
+      if(iAmVA){
+        // VA is replying — notify PM
+        const prop=data.properties.find(p=>p.Title===orig.PropertyId);
+        if(prop?.PMEmail)await sendEmail(tk,prop.PMEmail,`VA Reply: ${orig.Title?.replace("Review-","")} — ${orig.PropertyName||""}`,`${myEmp?.Name||myEmail} replied to a review request for "${orig.Title?.replace("Review-","")}" at ${orig.PropertyName||"property"}.\n\n"${note}"\n\nRespond in the VA Tracker: https://newshirepm.github.io/va-tracker/`);
+      }else{
+        // PM is replying — notify VA
+        if(orig.VAEmail)await sendEmail(tk,orig.VAEmail,`PM Response: ${orig.Title?.replace("Review-","")} — ${orig.PropertyName||""}`,`${myEmp?.Name||acct?.name||"Your PM"} responded to your review request for "${orig.Title?.replace("Review-","")}" at ${orig.PropertyName||"property"}.\n\n"${note}"\n\nCheck your My Reviews in the VA Tracker: https://newshirepm.github.io/va-tracker/`);
+      }
+      fl(newStatus==="Resolved"?"Review resolved — notification sent!":"Reply sent — notification sent!");await reload();
     }catch(e){fl("Error: "+e.message);}
   }
   async function resolveReview(reviewId,responseNote,responderName){
-    try{const tk=await gT();
-      // Mark original review as resolved
-      await gPatch(tk,iUrl("VA_Activity",reviewId),{Status:"Resolved"});
-      // If PM typed a response, create a ReviewResponse record linked to same GroupId
-      if(responseNote){
-        const orig=data.activities.find(a=>a.id===reviewId);
-        if(orig){
-          await gPost(tk,lUrl("VA_Activity"),{Title:`Response-${orig.Title||"Review"}`,ActivityType:"ReviewResponse",VAEmail:orig.VAEmail,VAName:orig.VAName,ActivityDate:new Date().toISOString(),PropertyId:orig.PropertyId||"",PropertyName:orig.PropertyName||"General",PMName:responderName||acct?.name||myEmail,Category:orig.Category||"",Notes:responseNote,Status:"Completed",GroupId:orig.GroupId||"",AssignedByEmail:myEmail,AssignedByName:responderName||acct?.name||myEmail});
-        }
-      }
-      fl("Review resolved!");await reload();
-    }catch(e){fl("Error: "+e.message);}
+    // Backward compat wrapper — routes to replyToReview with Resolved status
+    return replyToReview(reviewId,responseNote||"Resolved","Resolved");
   }
 
   // ── Coaching notes ──
@@ -543,12 +587,12 @@ function App(){
       {flash&&<div style={{background:C.gl0,borderBottom:`1px solid ${C.gold}`,padding:"7px 18px",fontSize:12,fontWeight:600,color:C.g2,textAlign:"center"}}>{flash}</div>}
       {/* Content */}
       <div style={ss.content}>
-        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} reviews={data.activities.filter(a=>a.ActivityType==="Review")} isAdmin={isAdmin} fl={fl}/>}
-        {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} myEmail={myEmail} acct={acct} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
+        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} onReplyToReview={replyToReview} reviews={data.activities.filter(a=>a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")} isAdmin={isAdmin} fl={fl}/>}
+        {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} onReplyToReview={replyToReview} myEmail={myEmail} acct={acct} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
         {ck==="coach"&&<CoachingView data={data} onSaveNote={saveCoachingNote}/>}
         {ck==="hist"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onAddGuest={addGuest} onDeactivateGuest={deactivateGuest} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onEditShift={editShift} onDeleteShift={deleteShift} onAddGuest={addGuest} onDeactivateGuest={deactivateGuest} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
       </div>
     </div>
   );
@@ -558,7 +602,7 @@ function App(){
 // ══════════════════════════════════════════════════════
 // MY DAY VIEW
 // ══════════════════════════════════════════════════════
-function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,onLogInterruption,onSubmitMetrics,onSendReview,onResolveReview,reviews,isAdmin,fl}){
+function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,onLogInterruption,onSubmitMetrics,onSendReview,onResolveReview,onReplyToReview,reviews,isAdmin,fl}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   // Interruption state
   const[iType,setIType]=useState("Prospect Call");const[iProp,setIProp]=useState("");const[iDur,setIDur]=useState("");const[iNotes,setINotes]=useState("");const[iConvert,setIConvert]=useState(false);const[iCat,setICat]=useState("");const[iPri,setIPri]=useState("Normal");const[iTaskDesc,setITaskDesc]=useState("");
@@ -701,16 +745,34 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
     {/* RIGHT COLUMN — Tools */}
     <div style={{minWidth:0}}>
 
-    {/* My Reviews — VA sees their flagged items + PM responses */}
+    {/* My Reviews — always visible */}
     {(()=>{
-      const myReviews=data.activities.filter(a=>a.ActivityType==="Review"&&a.VAEmail?.toLowerCase()===myEmail);
+      const myReviews=(reviews||[]).filter(a=>a.ActivityType==="Review"&&a.VAEmail?.toLowerCase()===myEmail);
+      const allResponses=(reviews||[]).filter(a=>a.ActivityType==="ReviewResponse");
       const pending=myReviews.filter(r=>r.Status==="Pending");
+      const responded=myReviews.filter(r=>r.Status==="Responded");
       const resolved=myReviews.filter(r=>r.Status==="Resolved").sort((a,b)=>(b.ActivityDate||"").localeCompare(a.ActivityDate||"")).slice(0,10);
-      if(!pending.length&&!resolved.length)return null;
       return<div style={{...ss.card,borderTop:`3px solid ${C.pu}`}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-          <div><div style={ss.cardT}>⚑ My Review Requests</div><div style={ss.cardS}>{pending.length} pending · {resolved.length} recently resolved</div></div>
+          <div><div style={ss.cardT}>⚑ My Review Requests</div><div style={ss.cardS}>{pending.length} pending · {responded.length} responded · {resolved.length} resolved</div></div>
         </div>
+        {!pending.length&&!responded.length&&!resolved.length&&<div style={{textAlign:"center",padding:"16px 0",color:C.b4,fontSize:12}}>No pending reviews. Use the purple ⚑ button on any task to request PM input.</div>}
+        {/* Responded — PM replied, VA can respond back or mark resolved */}
+        {responded.length>0&&<div style={{marginBottom:10}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.inf,textTransform:"uppercase",marginBottom:6}}>PM Responded — Action Needed</div>
+          {responded.map((r,i)=>{
+            const thread=r.GroupId?allResponses.filter(a=>a.GroupId===r.GroupId).sort((a,b)=>(a.ActivityDate||"").localeCompare(b.ActivityDate||"")):[];
+            const lastResponse=thread.length?thread[thread.length-1]:null;
+            return<div key={i} style={{padding:"8px 10px",background:C.infb,border:`1px solid rgba(43,95,168,0.15)`,borderRadius:6,marginBottom:6}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.t2}}>{r.Title?.replace("Review-","")}</div>
+              <div style={{fontSize:10,color:C.b4,marginTop:2}}>{r.PropertyName} · {r.PMName||"PM"}</div>
+              <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"4px 8px",borderRadius:4,marginTop:4}}>You asked: "{r.Notes}"</div>
+              {lastResponse&&<div style={{fontSize:11,color:C.ok,background:C.okb,border:`1px solid rgba(26,122,70,0.15)`,padding:"4px 8px",borderRadius:4,marginTop:4}}>
+                <span style={{fontSize:9,fontWeight:700,color:C.ok}}>{lastResponse.AssignedByName||"PM"}:</span> "{lastResponse.Notes}"
+              </div>}
+              <ReviewReplyBox reviewId={r.id} onReply={onReplyToReview} label="VA"/>
+            </div>;})}
+        </div>}
         {/* Pending */}
         {pending.length>0&&<div style={{marginBottom:10}}>
           <div style={{fontSize:10,fontWeight:700,color:C.wn,textTransform:"uppercase",marginBottom:6}}>Awaiting PM Response</div>
@@ -723,16 +785,13 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
         {/* Resolved */}
         {resolved.length>0&&<div>
           <div style={{fontSize:10,fontWeight:700,color:C.ok,textTransform:"uppercase",marginBottom:6}}>Resolved</div>
-          {resolved.map((r,i)=>{
-            // Find PM response for this review
-            const response=r.GroupId?data.activities.find(a=>a.ActivityType==="ReviewResponse"&&a.GroupId===r.GroupId&&new Date(a.ActivityDate)>=new Date(r.ActivityDate)):null;
-            return<div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${C.b1}`,opacity:0.8}}>
+          {resolved.slice(0,5).map((r,i)=>{
+            const thread=r.GroupId?allResponses.filter(a=>a.GroupId===r.GroupId).sort((a,b)=>(a.ActivityDate||"").localeCompare(b.ActivityDate||"")):[];
+            const lastResponse=thread.length?thread[thread.length-1]:null;
+            return<div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${C.b1}`,opacity:0.7}}>
               <div style={{fontSize:12,fontWeight:600,color:C.t2}}>{r.Title?.replace("Review-","")}</div>
-              <div style={{fontSize:10,color:C.b4,marginTop:2}}>{r.PropertyName} · Resolved {fD(r.ActivityDate)}</div>
-              <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"4px 8px",borderRadius:4,marginTop:4}}>You: "{r.Notes}"</div>
-              {response?<div style={{fontSize:11,color:C.ok,background:C.okb,border:`1px solid rgba(26,122,70,0.15)`,padding:"4px 8px",borderRadius:4,marginTop:4}}>
-                <span style={{fontSize:9,fontWeight:700,color:C.ok}}>{response.AssignedByName||"PM"} replied:</span> "{response.Notes}"
-              </div>:<div style={{fontSize:10,color:C.b4,fontStyle:"italic",marginTop:4}}>Resolved without response</div>}
+              <div style={{fontSize:10,color:C.b4,marginTop:2}}>{r.PropertyName}</div>
+              {lastResponse&&<div style={{fontSize:10,color:C.ok,marginTop:2}}>{lastResponse.AssignedByName}: "{lastResponse.Notes?.slice(0,80)}{lastResponse.Notes?.length>80?"...":""}"</div>}
             </div>;})}
         </div>}
       </div>;
@@ -822,6 +881,23 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
   </div>);
 }
 
+// ── Review Reply Box (inline reply + resolve for both VA and PM) ──
+function ReviewReplyBox({reviewId,onReply,label}){
+  const[open,setOpen]=useState(false);const[note,setNote]=useState("");
+  if(!open)return<div style={{display:"flex",gap:5,marginTop:6}}>
+    <button style={{...ss.btn(C.teal),...ss.xs}} onClick={()=>setOpen(true)}>Reply</button>
+    <button style={{...ss.btn(C.ok),...ss.xs}} onClick={()=>onReply(reviewId,"","Resolved")}>✓ Mark Resolved</button>
+  </div>;
+  return<div style={{marginTop:6}}>
+    <textarea style={{...ss.input,minHeight:40,marginBottom:5,fontSize:11}} value={note} onChange={e=>setNote(e.target.value)} placeholder="Type your reply..."/>
+    <div style={{display:"flex",gap:5}}>
+      <button style={{...ss.btn(C.teal),...ss.xs,flex:1}} onClick={()=>{if(!note.trim())return;onReply(reviewId,note,"Pending");setNote("");setOpen(false);}}>Send Reply</button>
+      <button style={{...ss.btn(C.ok),...ss.xs,flex:1}} onClick={()=>{onReply(reviewId,note||"","Resolved");setNote("");setOpen(false);}}>Reply & Resolve</button>
+      <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>{setNote("");setOpen(false);}}>Cancel</button>
+    </div>
+  </div>;
+}
+
 // ── Task Row ──
 function TaskRow({task,onStart,onDelete,onReview,showVA,isOverdue,reviewCount=0}){
   return(<div style={{display:"flex",alignItems:"flex-start",gap:9,padding:"9px 0",borderBottom:`1px solid ${C.b1}`}}>
@@ -851,7 +927,7 @@ function TaskRow({task,onStart,onDelete,onReview,showVA,isOverdue,reviewCount=0}
 // ══════════════════════════════════════════════════════
 // MANAGER VIEW
 // ══════════════════════════════════════════════════════
-function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAddTask,getVA,isAdmin,isRegional,onResolveReview,acct}){
+function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAddTask,getVA,isAdmin,isRegional,onResolveReview,onReplyToReview,acct}){
   const[selProp,setSelProp]=useState("");const[tCat,setTCat]=useState("");const[tDesc,setTDesc]=useState("");const[tPri,setTPri]=useState("Normal");const[tNotes,setTNotes]=useState("");
   const cats=data?.config?.categories||[];
   function handleSubmit(){if(!selProp||!tCat||!tDesc)return;const prop=data.properties.find(p=>p.Title===selProp);const va=getVA(selProp);if(!va){alert("No VA assigned.");return;}const cat=cats.find(c=>c.id===tCat);
@@ -862,13 +938,12 @@ function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAd
   const activeOnMine=timers.filter(t=>propIds.has(t.PropertyId));
   const overdueOnMine=overdue.filter(t=>propIds.has(t.PropertyId));
 
-  const[resId,setResId]=useState(null);const[resNote,setResNote]=useState("");
   // Pending reviews for my properties
-  const pendingReviews=data.activities.filter(a=>a.ActivityType==="Review"&&a.Status==="Pending"&&propIds.has(a.PropertyId));
+  const pendingReviews=data.activities.filter(a=>a.ActivityType==="Review"&&(a.Status==="Pending"||a.Status==="Responded")&&propIds.has(a.PropertyId));
 
   return(<div>
     {/* Review Inbox */}
-    {pendingReviews.length>0&&<div style={{...ss.card,borderTop:`3px solid ${C.pu}`,padding:0,overflow:"hidden"}}>
+    <div style={{...ss.card,borderTop:`3px solid ${C.pu}`,padding:0,overflow:"hidden"}}>
       <div style={{padding:"13px 14px 11px",borderBottom:`1px solid ${C.b1}`}}>
         <div style={{...ss.cardT,color:C.pu}}>⚑ Needs Your Review — {pendingReviews.length} item{pendingReviews.length!==1?"s":""}</div>
         <div style={ss.cardS}>VAs flagged these tasks and are waiting on your response</div>
@@ -885,19 +960,10 @@ function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAd
             </div>
           </div>
           <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"6px 8px",borderRadius:4,marginBottom:7,lineHeight:1.5}}>"{r.Notes}"</div>
-          {!isRes?<div style={{display:"flex",gap:6}}>
-            <button style={{...ss.btn(C.teal),...ss.xs}} onClick={()=>{setResId(r.id);setResNote("");}}>Reply & Resolve</button>
-            <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>onResolveReview(r.id,"","")}>Mark Resolved (no reply)</button>
-          </div>
-          :<div style={{marginTop:6}}>
-            <textarea style={{...ss.input,minHeight:50,marginBottom:6}} value={resNote} onChange={e=>setResNote(e.target.value)} placeholder="Type your response to the VA..."/>
-            <div style={{display:"flex",gap:6}}>
-              <button style={{...ss.btn(C.ok),...ss.xs,flex:1}} onClick={()=>{onResolveReview(r.id,resNote,acct?.name||myEmail);setResId(null);setResNote("");}}>✓ Send Response & Resolve</button>
-              <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>setResId(null)}>Cancel</button>
-            </div>
-          </div>}
+          <ReviewReplyBox reviewId={r.id} onReply={onReplyToReview} label="PM"/>
         </div>;})}
-    </div>}
+      {!pendingReviews.length&&<div style={{padding:"20px 14px",textAlign:"center",color:C.b4,fontSize:12}}>No pending review requests from your VAs.</div>}
+    </div>
 
     {/* Live Active Tasks */}
     {activeOnMine.length>0&&<div style={{...ss.card,borderTop:`3px solid ${C.ok}`}}>
@@ -1133,6 +1199,52 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps}){
 }
 
 // ══════════════════════════════════════════════════════
+// SHIFT MANAGER COMPONENT
+// ══════════════════════════════════════════════════════
+function ShiftManager({data,onEditShift,onDeleteShift}){
+  const[editId,setEditId]=useState(null);const[eIn,setEIn]=useState("");const[eOut,setEOut]=useState("");const[eBrk,setEBrk]=useState("");const[filterVa,setFilterVa]=useState("");
+  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&a.Status!=="Deleted").sort((a,b)=>(b.ActivityDate||b.StartTime||"").localeCompare(a.ActivityDate||a.StartTime||""));
+  const filtered=filterVa?shifts.filter(s=>s.VAEmail?.toLowerCase()===filterVa.toLowerCase()):shifts;
+
+  return<div style={{...ss.card,borderTop:`3px solid ${C.inf}`}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+      <div><div style={ss.cardT}>⏱ Shift Management</div><div style={ss.cardS}>Edit or delete shift records to correct clock-in/out errors</div></div>
+      <div style={{minWidth:150}}><select style={ss.select} value={filterVa} onChange={e=>setFilterVa(e.target.value)}><option value="">All VAs</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
+    </div>
+    {filtered.length===0&&<div style={{textAlign:"center",padding:"16px 0",color:C.b4,fontSize:12}}>No shift records found.</div>}
+    <div style={{borderRadius:8,border:`1px solid ${C.b1}`,overflow:"hidden"}}>
+      {filtered.slice(0,20).map((s,i)=>{const isEd=editId===s.id;const hasIssue=(()=>{const otherShifts=shifts.filter(x=>x.id!==s.id&&x.VAEmail===s.VAEmail&&x.ActivityDate?.slice(0,10)===s.ActivityDate?.slice(0,10));return otherShifts.length>0;})();
+        return<div key={s.id} style={{borderBottom:`1px solid ${C.b1}`,background:hasIssue?C.erb:"transparent"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px"}}>
+            <Avatar name={s.VAName} size={24}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:700,color:hasIssue?C.er:C.t2}}>{s.VAName}{hasIssue?" ⚠ Multiple shifts this day":""}</div>
+              <div style={{fontSize:10,color:C.b4}}>{fD(s.ActivityDate||s.StartTime)} · In: {fT(s.StartTime)} · Out: {fT(s.EndTime)} · Break: {fM(s.BreakMinutes)} · Work: {fM(s.WorkMinutes)}</div>
+            </div>
+            <div style={{display:"flex",gap:4,flexShrink:0}}>
+              <button style={{...ss.btnO(C.t2,C.b2),...ss.xs}} onClick={()=>{if(isEd){setEditId(null);}else{setEditId(s.id);setEIn(s.StartTime?.slice(0,16)||"");setEOut(s.EndTime?.slice(0,16)||"");setEBrk(String(s.BreakMinutes||0));}}}>✎</button>
+              <button style={{...ss.btnO(C.er,"rgba(184,59,42,0.3)"),...ss.xs}} onClick={()=>onDeleteShift(s.id)}>✕</button>
+            </div>
+          </div>
+          {isEd&&<div style={{padding:"10px 12px",background:C.tl00,borderTop:`1px solid ${C.b1}`}}>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
+              <div style={{flex:1,minWidth:160}}><label style={ss.label}>Clock In</label><input style={ss.input} type="datetime-local" value={eIn} onChange={e=>setEIn(e.target.value)}/></div>
+              <div style={{flex:1,minWidth:160}}><label style={ss.label}>Clock Out</label><input style={ss.input} type="datetime-local" value={eOut} onChange={e=>setEOut(e.target.value)}/></div>
+              <div style={{minWidth:80}}><label style={ss.label}>Break (min)</label><input style={ss.input} type="number" value={eBrk} onChange={e=>setEBrk(e.target.value)}/></div>
+            </div>
+            {eIn&&eOut&&<div style={{fontSize:11,color:C.b4,marginBottom:8}}>Calculated work time: {fM(Math.max(0,Math.round((new Date(eOut)-new Date(eIn))/6e4)-parseInt(eBrk||0)))}</div>}
+            <div style={{display:"flex",gap:6}}>
+              <button style={{...ss.btn(C.ok),...ss.xs}} onClick={()=>{const fields={StartTime:new Date(eIn).toISOString(),EndTime:new Date(eOut).toISOString(),BreakMinutes:parseInt(eBrk)||0,ActivityDate:new Date(eIn).toISOString()};onEditShift(s.id,fields);setEditId(null);}}>✓ Save</button>
+              <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>setEditId(null)}>Cancel</button>
+            </div>
+          </div>}
+        </div>;})}
+    </div>
+    {filtered.length>20&&<div style={{fontSize:10,color:C.b4,textAlign:"center",marginTop:6}}>Showing 20 of {filtered.length} shifts</div>}
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
 // NOTICE MANAGER COMPONENT
 // ══════════════════════════════════════════════════════
 function NoticeManager({config,onUpdateConfig}){
@@ -1192,7 +1304,7 @@ function NoticeManager({config,onUpdateConfig}){
 // ══════════════════════════════════════════════════════
 // ADMIN VIEW (with sub-navigation)
 // ══════════════════════════════════════════════════════
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onAddGuest,onDeactivateGuest,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onEditShift,onDeleteShift,onAddGuest,onDeactivateGuest,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
   const[sub,setSub]=useState("team");
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");const[aProps,setAProps]=useState([]);
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");const[rProps,setRProps]=useState([]);
@@ -1473,6 +1585,9 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
         </div>
         <NoticeManager config={config} onUpdateConfig={onUpdateConfig}/>
       </div>
+
+      {/* Shift Management */}
+      <ShiftManager data={data} onEditShift={onEditShift} onDeleteShift={onDeleteShift}/>
 
       {/* Absence Management */}
       <div style={{...ss.card,borderTop:`3px solid ${C.er}`}}>
