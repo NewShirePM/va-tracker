@@ -136,6 +136,10 @@ function Dot(){return<span style={{width:3,height:3,borderRadius:"50%",backgroun
 // MAIN APP
 // ══════════════════════════════════════════════════════
 function App(){
+  // ── Guest token detection ──
+  const guestToken=useRef(new URLSearchParams(window.location.search).get("guest")).current;
+  const[guestInfo,setGuestInfo]=useState(null);
+
   const{acct,token,login,refresh,err:authErr}=useMsal();
   const[tab,setTab]=useState(0);
   const[data,setData]=useState(null);
@@ -159,8 +163,30 @@ function App(){
   const fl=useCallback(msg=>{setFlash(msg);setTimeout(()=>setFlash(""),2500);},[]);
   async function gT(){return(await refresh())||token;}
 
-  // ── Load Data ──
+  // ── Guest Data Loading (via Cloudflare Worker) ──
   useEffect(()=>{
+    if(!guestToken)return;
+    setLoading(true);
+    fetch(`https://va-tracker-guest.newshire-pm.workers.dev?token=${guestToken}`)
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.error){setError(d.error);setLoading(false);return;}
+        setGuestInfo(d.guest);
+        setRole("guest");
+        setMyEmail(d.guest?.name||"Guest");
+        // Transform Worker response to match loadAll format
+        const employees=d.employees||[];
+        const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant"&&e.EmployeeActive!==false);
+        const pms=employees.filter(e=>(e.JobTitle==="Property Manager"||e.JobTitle==="Regional/Portfolio Manager")&&e.EmployeeActive!==false);
+        setData({employees,config:d.config||{},properties:d.properties||[],portfolios:d.portfolios||[],activities:d.activities||[],vas,pms,guests:[]});
+        setLoading(false);
+      })
+      .catch(e=>{setError("Failed to load: "+e.message);setLoading(false);});
+  },[guestToken]);
+
+  // ── Load Data (authenticated users) ──
+  useEffect(()=>{
+    if(guestToken)return; // Skip if guest mode
     if(!token||!acct)return;
     const email=acct.username.toLowerCase();
     setMyEmail(email);setLoading(true);
@@ -241,6 +267,19 @@ function App(){
   async function deleteTask(task){
     if(task._spId){try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:"Incomplete",Notes:"Removed by admin"});}catch(e){fl("Error: "+e.message);return;}}
     setQueue(p=>p.filter(t=>t._localId!==task._localId));setCovQ(p=>p.filter(t=>t._localId!==task._localId));fl("Task removed");
+  }
+
+  // ── Guest management ──
+  async function addGuest({name,email,company,vaEmails}){
+    try{const tk=await gT();
+      const token=Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+      await gPost(tk,lUrl("VA_Guests"),{Title:token,GuestName:name,GuestEmail:email.toLowerCase(),Company:company||"",VAEmails:vaEmails.join(","),IsActive:true,InvitedDate:new Date().toISOString(),InvitedBy:acct?.name||myEmail});
+      await reload();fl(`${name} added! Copy their guest URL from the Guests tab.`);
+    }catch(e){fl("Error: "+e.message);}
+  }
+  async function deactivateGuest(id,name){
+    if(!window.confirm(`Deactivate guest access for ${name}?`))return;
+    try{const tk=await gT();await gPatch(tk,iUrl("VA_Guests",id),{IsActive:false});await reload();fl(`${name} deactivated`);}catch(e){fl("Error: "+e.message);}
   }
 
   // ── Review request (VA → Manager) ──
@@ -450,26 +489,27 @@ function App(){
   const myOverdue=overdueTasks.filter(t=>isVA?t.VAEmail?.toLowerCase()===myEmail:true);
 
   // ── Auth Screens ──
-  if(!acct)return(<div style={ss.app}><div style={ss.hdr}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={ss.logo}>V</div><div><div style={{color:"#fff",fontSize:14,fontWeight:700,letterSpacing:"0.04em"}}>{CONFIG.appName}</div><div style={{color:"rgba(255,255,255,0.4)",fontSize:9,letterSpacing:"0.08em",textTransform:"uppercase"}}>NewShire Property Management</div></div></div></div><div style={{...ss.content,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{...ss.card,textAlign:"center",maxWidth:360,padding:32}}><div style={{fontSize:36,marginBottom:12}}>⏱</div><div style={{fontSize:18,fontWeight:700,color:C.t2,marginBottom:6}}>VA Productivity Tracker</div><div style={{color:C.b4,marginBottom:20,fontSize:12}}>Sign in with your NewShire account.</div><button style={ss.btn(C.teal)} onClick={login}>Sign In with Microsoft</button>{authErr&&<div style={{color:C.er,marginTop:12,fontSize:11}}>{authErr}</div>}</div></div></div>);
+  if(!acct&&!guestToken)return(<div style={ss.app}><div style={ss.hdr}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={ss.logo}>V</div><div><div style={{color:"#fff",fontSize:14,fontWeight:700,letterSpacing:"0.04em"}}>{CONFIG.appName}</div><div style={{color:"rgba(255,255,255,0.4)",fontSize:9,letterSpacing:"0.08em",textTransform:"uppercase"}}>NewShire Property Management</div></div></div></div><div style={{...ss.content,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{...ss.card,textAlign:"center",maxWidth:360,padding:32}}><div style={{fontSize:36,marginBottom:12}}>⏱</div><div style={{fontSize:18,fontWeight:700,color:C.t2,marginBottom:6}}>VA Productivity Tracker</div><div style={{color:C.b4,marginBottom:20,fontSize:12}}>Sign in with your NewShire account.</div><button style={ss.btn(C.teal)} onClick={login}>Sign In with Microsoft</button>{authErr&&<div style={{color:C.er,marginTop:12,fontSize:11}}>{authErr}</div>}</div></div></div>);
   if(loading)return(<div style={ss.app}><div style={ss.hdr}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={ss.logo}>V</div><div><div style={{color:"#fff",fontSize:14,fontWeight:700}}>{CONFIG.appName}</div></div></div></div><div style={{...ss.content,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:16,color:C.b4}}>Loading...</div></div></div>);
   if(error||!role)return(<div style={ss.app}><div style={ss.hdr}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={ss.logo}>V</div><div><div style={{color:"#fff",fontSize:14,fontWeight:700}}>{CONFIG.appName}</div></div></div></div><div style={{...ss.content,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{...ss.card,borderTop:`3px solid ${C.er}`,maxWidth:400,textAlign:"center",padding:32}}><div style={{fontSize:36,marginBottom:12}}>🚫</div><div style={{fontSize:16,fontWeight:700,color:C.er,marginBottom:6}}>{error==="access_denied"?"Access Denied":"Error"}</div><div style={{color:C.b4,fontSize:12}}>{error==="access_denied"?"Your account is not authorized.":error}</div><div style={{color:C.b3,fontSize:10,marginTop:12}}>Signed in as: {myEmail}</div></div></div></div>);
 
   // ── Tabs ──
+  const isGuest=role==="guest";
   const TABS=[];
-  if(isVA||isAdmin)TABS.push({n:"My Day",k:"myday"});
-  if(isMgr)TABS.push({n:"Manager View",k:"mgr",badge:myOverdue.length>0?myOverdue.length:0,badgeBg:C.er});
+  if(!isGuest&&(isVA||isAdmin))TABS.push({n:"My Day",k:"myday"});
+  if(!isGuest&&isMgr)TABS.push({n:"Manager View",k:"mgr",badge:myOverdue.length>0?myOverdue.length:0,badgeBg:C.er});
   TABS.push({n:"Dashboard",k:"dash"});
-  if(isAdmin||isRegional)TABS.push({n:"Coaching",k:"coach"});
+  if(!isGuest&&(isAdmin||isRegional))TABS.push({n:"Coaching",k:"coach"});
   TABS.push({n:"History",k:"hist"});
-  if(isAdmin)TABS.push({n:"Admin",k:"admin",badge:covQ.length+outVAs.length,badgeBg:C.t3});
+  if(!isGuest&&isAdmin)TABS.push({n:"Admin",k:"admin",badge:covQ.length+outVAs.length,badgeBg:C.t3});
   const ck=TABS[tab]?.k||TABS[0]?.k;
 
   // ── Header pills ──
   const pills=[];
-  if(timers.length>0)pills.push({c:C.ok,n:timers.length,l:"timing"});
-  if(covQ.length>0)pills.push({c:C.wn,n:covQ.length,l:"coverage"});
-  if(myOverdue.length>0)pills.push({c:C.er,n:myOverdue.length,l:"overdue"});
-  if(outVAs.length>0)pills.push({c:C.er,n:outVAs.length,l:"out"});
+  if(!isGuest&&timers.length>0)pills.push({c:C.ok,n:timers.length,l:"timing"});
+  if(!isGuest&&covQ.length>0)pills.push({c:C.wn,n:covQ.length,l:"coverage"});
+  if(!isGuest&&myOverdue.length>0)pills.push({c:C.er,n:myOverdue.length,l:"overdue"});
+  if(!isGuest&&outVAs.length>0)pills.push({c:C.er,n:outVAs.length,l:"out"});
 
   return(
     <div style={ss.app}>
@@ -483,7 +523,7 @@ function App(){
         <div style={{display:"flex",alignItems:"center",gap:6,flex:1,justifyContent:"center",flexWrap:"wrap"}}>
           {pills.map((p,i)=><div key={i} style={ss.pill}><span style={{width:5,height:5,borderRadius:"50%",background:p.c}}/><strong style={{color:"#fff",fontWeight:700}}>{p.n}</strong>&nbsp;{p.l}</div>)}
         </div>
-        <div style={{textAlign:"right",flexShrink:0}}><strong style={{display:"block",fontSize:12,fontWeight:600,color:"#fff"}}>{acct.name||myEmail}</strong><em style={{fontSize:9,fontStyle:"normal",color:C.gold,textTransform:"uppercase",letterSpacing:"0.07em"}}>{role}</em></div>
+        <div style={{textAlign:"right",flexShrink:0}}><strong style={{display:"block",fontSize:12,fontWeight:600,color:"#fff"}}>{isGuest?`${guestInfo?.name||"Guest"} · ${guestInfo?.company||""}`:acct?.name||myEmail}</strong><em style={{fontSize:9,fontStyle:"normal",color:isGuest?C.pu:C.gold,textTransform:"uppercase",letterSpacing:"0.07em"}}>{isGuest?"Guest (read-only)":role}</em></div>
       </div>
       {/* Tabs */}
       <div style={ss.tabs}>
@@ -497,7 +537,7 @@ function App(){
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
         {ck==="coach"&&<CoachingView data={data} onSaveNote={saveCoachingNote}/>}
         {ck==="hist"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onAddGuest={addGuest} onDeactivateGuest={deactivateGuest} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
       </div>
     </div>
   );
@@ -1068,7 +1108,7 @@ function NoticeManager({config,onUpdateConfig}){
 // ══════════════════════════════════════════════════════
 // ADMIN VIEW (with sub-navigation)
 // ══════════════════════════════════════════════════════
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onAddGuest,onDeactivateGuest,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
   const[sub,setSub]=useState("team");
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");const[aProps,setAProps]=useState([]);
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");const[rProps,setRProps]=useState([]);
@@ -1312,25 +1352,30 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
             <strong style={{color:C.t2}}>How it works:</strong> Guests get a unique URL with a token. They open it in any browser — no login required. They see a read-only Dashboard, History, and Scorecard filtered to only the VAs you assign.
           </div>
           <button style={{...ss.btn(C.ok),...ss.sm}} onClick={()=>{if(!gName||!gEmail||!gVAs.length){return;}
-            // TODO: Create guest record in VA_Guests + generate token URL
-            // For now, show what will be created
-            alert("Guest system requires the Cloudflare Worker to be deployed.\n\nGuest: "+gName+"\nEmail: "+gEmail+"\nVAs: "+gVAs.join(", "));
+            onAddGuest({name:gName,email:gEmail,company:gCompany,vaEmails:gVAs});
             setGName("");setGEmail("");setGCompany("");setGVAs([]);
           }}>✓ Add Guest & Generate URL</button>
         </div>
         {/* Existing Guests */}
         {(()=>{const guests=(data.guests||[]).filter(g=>g.IsActive!==false);
           if(!guests.length)return<div style={{textAlign:"center",padding:"20px 0",color:C.b4,fontSize:12}}>No guests configured yet. Add one above.</div>;
-          return guests.map((g,i)=><div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 0",borderBottom:`1px solid ${C.b1}`}}>
+          return guests.map((g,i)=>{
+            const guestUrl=`https://va-tracker-guest.newshire-pm.workers.dev?token=${g.Title}`;
+            const vaNames=(g.VAEmails||"").split(",").map(e=>{const v=data.vas.find(va=>va.Email?.toLowerCase()===e.trim().toLowerCase());return v?v.Name:e;}).join(", ");
+            return<div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"12px 0",borderBottom:`1px solid ${C.b1}`}}>
             <Avatar name={g.GuestName} size={30} colorIdx={4}/>
-            <div style={{flex:1}}><div style={{fontSize:12,fontWeight:700}}>{g.GuestName}{g.Company?` — ${g.Company}`:""}</div><div style={{fontSize:10,color:C.b4,marginTop:1}}>VAs: {g.VAEmails||"none assigned"}</div>
-              <div style={{fontFamily:mono,fontSize:9,color:C.inf,background:C.infb,padding:"3px 7px",borderRadius:3,marginTop:4,display:"inline-block",wordBreak:"break-all"}}>…/va-tracker/?guest={g.Title}</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:700}}>{g.GuestName}{g.Company?` — ${g.Company}`:""}</div>
+              <div style={{fontSize:10,color:C.b4,marginTop:1}}>VAs: {vaNames||"none assigned"}</div>
+              <div style={{fontSize:10,color:C.b4,marginTop:1}}>Email: {g.GuestEmail}</div>
+              <div style={{fontFamily:mono,fontSize:9,color:C.inf,background:C.infb,padding:"3px 7px",borderRadius:3,marginTop:4,display:"inline-block",wordBreak:"break-all"}}>{guestUrl}</div>
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
               <Badge type="ok" dot={false}>Active</Badge>
-              <button style={{...ss.btnO(C.t2,C.b2),...ss.xs}} onClick={()=>{navigator.clipboard?.writeText(window.location.origin+"/va-tracker/?guest="+g.Title);fl("URL copied!");}}>📋 Copy URL</button>
+              <button style={{...ss.btnO(C.t2,C.b2),...ss.xs}} onClick={()=>{navigator.clipboard?.writeText(guestUrl).then(()=>alert("URL copied to clipboard!")).catch(()=>{const ta=document.createElement("textarea");ta.value=guestUrl;document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);alert("URL copied!");});}}>📋 Copy URL</button>
+              <button style={{...ss.btnO(C.er,"rgba(184,59,42,0.3)"),...ss.xs}} onClick={()=>onDeactivateGuest(g.id,g.GuestName)}>Deactivate</button>
             </div>
-          </div>);
+          </div>;});
         })()}
       </div>
     </div>}
