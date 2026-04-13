@@ -418,11 +418,14 @@ function App(){
     await gPatch(t,iUrl("Employees",va.id),{VATrackerStatus:ns});
     if(ns==="Out"){
       await gPost(t,lUrl("VA_Activity"),{Title:`${va.Name}-Out-${today()}`,ActivityType:"Absence",VAEmail:va.Email,VAName:va.Name,ActivityDate:new Date().toISOString(),StartTime:new Date().toISOString(),Status:"Out",MarkedByEmail:myEmail,MarkedByName:acct.name||myEmail});
-      const mv=queue.filter(q=>q.VAEmail.toLowerCase()===va.Email.toLowerCase());
+      // Only move TODAY's queued tasks to coverage — old tasks are overdue, not coverage
+      const td=today();
+      const mv=queue.filter(q=>q.VAEmail.toLowerCase()===va.Email.toLowerCase()&&(q.ActivityDate?.slice(0,10)===td||!q.ActivityDate));
+      const stale=queue.filter(q=>q.VAEmail.toLowerCase()===va.Email.toLowerCase()&&q.ActivityDate?.slice(0,10)<td);
       for(const task of mv){if(task._spId){try{await gPatch(t,iUrl("VA_Activity",task._spId),{Source:"Coverage",CoverageForEmail:va.Email,CoverageForName:va.Name});}catch(e){}}}
       const rest=queue.filter(q=>q.VAEmail.toLowerCase()!==va.Email.toLowerCase());
       mv.forEach(q=>{q.Source="Coverage";q.CoverageForEmail=va.Email;q.CoverageForName=va.Name;});
-      setQueue(rest);setCovQ(p=>[...p,...mv]);fl(`${va.Name} marked OUT — ${mv.length} tasks to coverage`);
+      setQueue([...rest,...stale]);setCovQ(p=>[...p,...mv]);fl(`${va.Name} marked OUT — ${mv.length} tasks to coverage${stale.length>0?` (${stale.length} overdue tasks unchanged)`:""}`);
     }else{
       const returning=covQ.filter(q=>q.CoverageForEmail?.toLowerCase()===va.Email.toLowerCase());
       for(const task of returning){if(task._spId){try{await gPatch(t,iUrl("VA_Activity",task._spId),{Source:"Daily",VAEmail:va.Email,VAName:va.Name,CoverageForEmail:"",CoverageForName:""});}catch(e){}}}
