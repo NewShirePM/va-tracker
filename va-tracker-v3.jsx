@@ -289,8 +289,19 @@ function App(){
       fl("Review request sent to PM!");await reload();
     }catch(e){fl("Error: "+e.message);}
   }
-  async function resolveReview(reviewId){
-    try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",reviewId),{Status:"Resolved"});fl("Review resolved!");await reload();}catch(e){fl("Error: "+e.message);}
+  async function resolveReview(reviewId,responseNote,responderName){
+    try{const tk=await gT();
+      // Mark original review as resolved
+      await gPatch(tk,iUrl("VA_Activity",reviewId),{Status:"Resolved"});
+      // If PM typed a response, create a ReviewResponse record linked to same GroupId
+      if(responseNote){
+        const orig=data.activities.find(a=>a.id===reviewId);
+        if(orig){
+          await gPost(tk,lUrl("VA_Activity"),{Title:`Response-${orig.Title||"Review"}`,ActivityType:"ReviewResponse",VAEmail:orig.VAEmail,VAName:orig.VAName,ActivityDate:new Date().toISOString(),PropertyId:orig.PropertyId||"",PropertyName:orig.PropertyName||"General",PMName:responderName||acct?.name||myEmail,Category:orig.Category||"",Notes:responseNote,Status:"Completed",GroupId:orig.GroupId||"",AssignedByEmail:myEmail,AssignedByName:responderName||acct?.name||myEmail});
+        }
+      }
+      fl("Review resolved!");await reload();
+    }catch(e){fl("Error: "+e.message);}
   }
 
   // ── Coaching notes ──
@@ -533,7 +544,7 @@ function App(){
       {/* Content */}
       <div style={ss.content}>
         {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} reviews={data.activities.filter(a=>a.ActivityType==="Review")} isAdmin={isAdmin} fl={fl}/>}
-        {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
+        {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} myEmail={myEmail} acct={acct} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
         {ck==="coach"&&<CoachingView data={data} onSaveNote={saveCoachingNote}/>}
         {ck==="hist"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
@@ -690,6 +701,43 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
     {/* RIGHT COLUMN — Tools */}
     <div style={{minWidth:0}}>
 
+    {/* My Reviews — VA sees their flagged items + PM responses */}
+    {(()=>{
+      const myReviews=data.activities.filter(a=>a.ActivityType==="Review"&&a.VAEmail?.toLowerCase()===myEmail);
+      const pending=myReviews.filter(r=>r.Status==="Pending");
+      const resolved=myReviews.filter(r=>r.Status==="Resolved").sort((a,b)=>(b.ActivityDate||"").localeCompare(a.ActivityDate||"")).slice(0,10);
+      if(!pending.length&&!resolved.length)return null;
+      return<div style={{...ss.card,borderTop:`3px solid ${C.pu}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+          <div><div style={ss.cardT}>⚑ My Review Requests</div><div style={ss.cardS}>{pending.length} pending · {resolved.length} recently resolved</div></div>
+        </div>
+        {/* Pending */}
+        {pending.length>0&&<div style={{marginBottom:10}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.wn,textTransform:"uppercase",marginBottom:6}}>Awaiting PM Response</div>
+          {pending.map((r,i)=><div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${C.b1}`}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.t2}}>{r.Title?.replace("Review-","")}</div>
+            <div style={{fontSize:10,color:C.b4,marginTop:2}}>{r.PropertyName} · {r.PMName||"PM"} · Sent {fD(r.ActivityDate)} {fT(r.ActivityDate)}</div>
+            <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"4px 8px",borderRadius:4,marginTop:4}}>"{r.Notes}"</div>
+          </div>)}
+        </div>}
+        {/* Resolved */}
+        {resolved.length>0&&<div>
+          <div style={{fontSize:10,fontWeight:700,color:C.ok,textTransform:"uppercase",marginBottom:6}}>Resolved</div>
+          {resolved.map((r,i)=>{
+            // Find PM response for this review
+            const response=r.GroupId?data.activities.find(a=>a.ActivityType==="ReviewResponse"&&a.GroupId===r.GroupId&&new Date(a.ActivityDate)>=new Date(r.ActivityDate)):null;
+            return<div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${C.b1}`,opacity:0.8}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.t2}}>{r.Title?.replace("Review-","")}</div>
+              <div style={{fontSize:10,color:C.b4,marginTop:2}}>{r.PropertyName} · Resolved {fD(r.ActivityDate)}</div>
+              <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"4px 8px",borderRadius:4,marginTop:4}}>You: "{r.Notes}"</div>
+              {response?<div style={{fontSize:11,color:C.ok,background:C.okb,border:`1px solid rgba(26,122,70,0.15)`,padding:"4px 8px",borderRadius:4,marginTop:4}}>
+                <span style={{fontSize:9,fontWeight:700,color:C.ok}}>{response.AssignedByName||"PM"} replied:</span> "{response.Notes}"
+              </div>:<div style={{fontSize:10,color:C.b4,fontStyle:"italic",marginTop:4}}>Resolved without response</div>}
+            </div>;})}
+        </div>}
+      </div>;
+    })()}
+
     {/* Interruption Logger */}
     <div style={{...ss.card,borderTop:`3px solid ${C.t3}`}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
@@ -803,7 +851,7 @@ function TaskRow({task,onStart,onDelete,onReview,showVA,isOverdue,reviewCount=0}
 // ══════════════════════════════════════════════════════
 // MANAGER VIEW
 // ══════════════════════════════════════════════════════
-function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAddTask,getVA,isAdmin,isRegional}){
+function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAddTask,getVA,isAdmin,isRegional,onResolveReview,acct}){
   const[selProp,setSelProp]=useState("");const[tCat,setTCat]=useState("");const[tDesc,setTDesc]=useState("");const[tPri,setTPri]=useState("Normal");const[tNotes,setTNotes]=useState("");
   const cats=data?.config?.categories||[];
   function handleSubmit(){if(!selProp||!tCat||!tDesc)return;const prop=data.properties.find(p=>p.Title===selProp);const va=getVA(selProp);if(!va){alert("No VA assigned.");return;}const cat=cats.find(c=>c.id===tCat);
@@ -814,7 +862,43 @@ function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAd
   const activeOnMine=timers.filter(t=>propIds.has(t.PropertyId));
   const overdueOnMine=overdue.filter(t=>propIds.has(t.PropertyId));
 
+  const[resId,setResId]=useState(null);const[resNote,setResNote]=useState("");
+  // Pending reviews for my properties
+  const pendingReviews=data.activities.filter(a=>a.ActivityType==="Review"&&a.Status==="Pending"&&propIds.has(a.PropertyId));
+
   return(<div>
+    {/* Review Inbox */}
+    {pendingReviews.length>0&&<div style={{...ss.card,borderTop:`3px solid ${C.pu}`,padding:0,overflow:"hidden"}}>
+      <div style={{padding:"13px 14px 11px",borderBottom:`1px solid ${C.b1}`}}>
+        <div style={{...ss.cardT,color:C.pu}}>⚑ Needs Your Review — {pendingReviews.length} item{pendingReviews.length!==1?"s":""}</div>
+        <div style={ss.cardS}>VAs flagged these tasks and are waiting on your response</div>
+      </div>
+      {pendingReviews.map((r,i)=>{const isRes=resId===r.id;
+        // Find all reviews in this thread (same GroupId)
+        const thread=r.GroupId?data.activities.filter(a=>(a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")&&a.GroupId===r.GroupId).sort((a,b)=>(a.ActivityDate||"").localeCompare(b.ActivityDate||"")):[];
+        return<div key={i} style={{padding:"12px 14px",borderBottom:`1px solid ${C.b1}`}}>
+          <div style={{display:"flex",alignItems:"flex-start",gap:9,marginBottom:8}}>
+            <Avatar name={r.VAName} size={30} colorIdx={4}/>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.t2}}>{r.VAName} · {r.PropertyName}</div>
+              <div style={{fontSize:10,color:C.b4,marginTop:1}}>{r.Category||"Review"} · {fD(r.ActivityDate)} {fT(r.ActivityDate)}{thread.length>1?` · ${thread.length} in thread`:""}</div>
+            </div>
+          </div>
+          <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"6px 8px",borderRadius:4,marginBottom:7,lineHeight:1.5}}>"{r.Notes}"</div>
+          {!isRes?<div style={{display:"flex",gap:6}}>
+            <button style={{...ss.btn(C.teal),...ss.xs}} onClick={()=>{setResId(r.id);setResNote("");}}>Reply & Resolve</button>
+            <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>onResolveReview(r.id,"","")}>Mark Resolved (no reply)</button>
+          </div>
+          :<div style={{marginTop:6}}>
+            <textarea style={{...ss.input,minHeight:50,marginBottom:6}} value={resNote} onChange={e=>setResNote(e.target.value)} placeholder="Type your response to the VA..."/>
+            <div style={{display:"flex",gap:6}}>
+              <button style={{...ss.btn(C.ok),...ss.xs,flex:1}} onClick={()=>{onResolveReview(r.id,resNote,acct?.name||myEmail);setResId(null);setResNote("");}}>✓ Send Response & Resolve</button>
+              <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>setResId(null)}>Cancel</button>
+            </div>
+          </div>}
+        </div>;})}
+    </div>}
+
     {/* Live Active Tasks */}
     {activeOnMine.length>0&&<div style={{...ss.card,borderTop:`3px solid ${C.ok}`}}>
       <div style={ss.cardT}>🟢 Currently Active on Your Properties</div><div style={{...ss.cardS,marginBottom:10}}>Live · {activeOnMine.length} tasks in progress</div>
