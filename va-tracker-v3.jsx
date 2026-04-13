@@ -59,7 +59,10 @@ async function loadAll(token){
   const config=cR.length>0?JSON.parse(cR[0].fields.ConfigJSON||"{}"):{};
   const properties=pR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
   const portfolios=ptR.map(p=>({id:p.id,...p.fields})).filter(p=>p.IsActive!==false);
-  const activities=aR.map(a=>({id:a.id,...a.fields}));
+  const allActs=aR.map(a=>({id:a.id,...a.fields}));
+  // Filter out activity before dataStartDate (if set in config)
+  const cutoff=config.dataStartDate||null;
+  const activities=cutoff?allActs.filter(a=>{const d=a.ActivityDate||a.StartTime||"";return d>=cutoff;}):allActs;
   const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant"&&e.EmployeeActive!==false);
   const pms=employees.filter(e=>(e.JobTitle==="Property Manager"||e.JobTitle==="Regional/Portfolio Manager"||e.JobTitle==="Owner/Operator")&&e.EmployeeActive!==false);
   return{employees,config,properties,portfolios,activities,vas,pms};
@@ -330,6 +333,62 @@ function App(){
     }catch(e){fl("Error: "+e.message);}
   }
   async function editProperty(id,fields){try{const t=await gT();await gPatch(t,iUrl("VA_Properties",id),fields);await reload();fl("Updated!");}catch(e){fl("Error: "+e.message);}}
+  async function editEmployee(id,fields){try{const t=await gT();await gPatch(t,iUrl("Employees",id),fields);await reload();fl("Employee updated!");}catch(e){fl("Error: "+e.message);}}
+
+  // ── Full VA reassignment cascade for a property ──
+  async function reassignPropertyVA(propId,oldVaEmail,newVaEmail,newVaName){
+    try{
+      const t=await gT();
+      const prop=data.properties.find(p=>p.Title===propId);
+      const propName=prop?.PropertyName||propId;
+      let moved=0;
+
+      // 1. Portfolio: unassign old, assign new
+      const oldPort=data.portfolios.find(p=>p.PropertyId===propId&&p.VAEmail?.toLowerCase()===oldVaEmail?.toLowerCase());
+      if(oldPort)await gPatch(t,iUrl("VA_Portfolios",oldPort.id),{IsActive:false});
+      if(newVaEmail){
+        const exNew=data.portfolios.find(p=>p.PropertyId===propId&&p.VAEmail?.toLowerCase()===newVaEmail.toLowerCase());
+        if(exNew)await gPatch(t,iUrl("VA_Portfolios",exNew.id),{IsActive:true,VAEmail:newVaEmail,VAName:newVaName});
+        else await gPost(t,lUrl("VA_Portfolios"),{Title:`${newVaName.split(" ")[0]}-${propName.replace(/\s+/g,"")}`.slice(0,50),VAEmail:newVaEmail,VAName:newVaName,PropertyId:propId,PropertyName:propName,AssignedDate:new Date().toISOString(),IsActive:true});
+      }
+
+      // 2. Recurring tasks: update config JSON — change vaEmail on matching propertyId
+      if(data.config.recurringTasks&&newVaEmail){
+        const updated=data.config.recurringTasks.map(rt=>{
+          if(rt.propertyId===propId&&rt.vaEmail?.toLowerCase()===oldVaEmail?.toLowerCase()){
+            return{...rt,vaEmail:newVaEmail};
+          }
+          return rt;
+        });
+        const changed=updated.some((rt,i)=>rt.vaEmail!==data.config.recurringTasks[i].vaEmail);
+        if(changed){
+          const ci=await gAll(t,`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`);
+          const item=ci.find(c=>c.fields.Title==="VATrackerSettings");
+          if(item){await gPatch(t,iUrl("VA_TrackerConfig",item.id),{ConfigJSON:JSON.stringify({...data.config,recurringTasks:updated})});}
+        }
+      }
+
+      // 3. Queued tasks in SharePoint: PATCH all Queued tasks for this property from old VA to new VA
+      if(newVaEmail&&oldVaEmail){
+        const pendingTasks=data.activities.filter(a=>a.ActivityType==="Task"&&(a.Status==="Queued"||a.Status==="In Progress")&&a.PropertyId===propId&&a.VAEmail?.toLowerCase()===oldVaEmail.toLowerCase());
+        for(const task of pendingTasks){
+          try{await gPatch(t,iUrl("VA_Activity",task.id),{VAEmail:newVaEmail,VAName:newVaName});moved++;}catch(e){console.warn("[VT] Task reassign failed:",task.id,e);}
+        }
+        // Update local queue state
+        setQueue(prev=>prev.map(q=>{
+          if(q.PropertyId===propId&&q.VAEmail?.toLowerCase()===oldVaEmail.toLowerCase()){return{...q,VAEmail:newVaEmail,VAName:newVaName};}
+          return q;
+        }));
+        setCovQ(prev=>prev.map(q=>{
+          if(q.PropertyId===propId&&q.VAEmail?.toLowerCase()===oldVaEmail.toLowerCase()){return{...q,VAEmail:newVaEmail,VAName:newVaName};}
+          return q;
+        }));
+      }
+
+      await reload();
+      fl(`${propName} → ${newVaName||"unassigned"}${moved>0?` · ${moved} pending tasks moved`:""}`);
+    }catch(e){fl("Error reassigning: "+e.message);}
+  }
 
   // ── Helpers ──
   function getVAForProperty(propId){const port=data?.portfolios.find(p=>p.PropertyId===propId);if(!port)return null;return data?.vas.find(v=>v.Email?.toLowerCase()===port.VAEmail?.toLowerCase())||null;}
@@ -399,7 +458,7 @@ function App(){
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
         {ck==="coach"&&<CoachingView data={data}/>}
         {ck==="hist"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onAddProperty={addProperty} onEditProperty={editProperty} onDeleteTask={deleteTask}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
       </div>
     </div>
   );
@@ -753,7 +812,7 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps}){
 // ══════════════════════════════════════════════════════
 // ADMIN VIEW (with sub-navigation)
 // ══════════════════════════════════════════════════════
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onAddProperty,onEditProperty,onDeleteTask}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
   const[sub,setSub]=useState("team");
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");const[aProps,setAProps]=useState([]);
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");const[rProps,setRProps]=useState([]);
@@ -761,6 +820,10 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   const[portVa,setPortVa]=useState("");const[portProp,setPortProp]=useState("");
   const[showAddProp,setShowAddProp]=useState(false);const[npName,setNpName]=useState("");const[npGroup,setNpGroup]=useState("Multifamily");const[npUnits,setNpUnits]=useState("");const[npPm,setNpPm]=useState("");
   const[roleFilter,setRoleFilter]=useState("all");
+  // Employee edit state
+  const[editEmpId,setEditEmpId]=useState(null);const[eName,setEName]=useState("");const[eEmail,setEEmail]=useState("");const[eTitle,setETitle]=useState("");const[eRole,setERole]=useState("");
+  // Property edit state
+  const[editPropId,setEditPropId]=useState(null);const[epName,setEpName]=useState("");const[epUnits,setEpUnits]=useState("");const[epGroup,setEpGroup]=useState("");const[epPm,setEpPm]=useState("");const[epVa,setEpVa]=useState("");
   if(!data)return null;
   const cats=config?.categories||[];const rTasks=config?.recurringTasks||[];
   function vaProps(email){return data.properties.filter(p=>data.portfolios.some(pt=>pt.VAEmail?.toLowerCase()===email.toLowerCase()&&pt.PropertyId===p.Title));}
@@ -802,8 +865,9 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       <div style={{...ss.card,padding:0,overflow:"hidden"}}>
         {roleGroups.filter(g=>roleFilter==="all"||roleFilter===g.key).map(g=><div key={g.key}>
           <div style={{padding:"8px 13px",borderBottom:`1px solid ${C.b1}`,borderTop:`1px solid ${C.b1}`,fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",background:g.bg,color:g.fg}}>{g.label}</div>
-          {g.emps.map(emp=>{const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===emp.Email?.toLowerCase());
-            return<div key={emp.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 13px",borderBottom:`1px solid ${C.b1}`}}>
+          {g.emps.map(emp=>{const port=data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===emp.Email?.toLowerCase());const isEditing=editEmpId===emp.id;const isSelf=emp.Email?.toLowerCase()===myEmail;
+            return<div key={emp.id}>
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 13px",borderBottom:isEditing?"none":`1px solid ${C.b1}`}}>
               <Avatar name={emp.Name} size={30} isOut={emp.VATrackerStatus==="Out"}/>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,fontWeight:700,color:emp.VATrackerStatus==="Out"?C.er:C.t2}}>{emp.Name}</div>
@@ -812,12 +876,33 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
                   <span style={{display:"inline-flex",padding:"2px 8px",fontSize:10,fontWeight:700,borderRadius:99,background:g.bg,color:g.fg}}>{g.key==="va"?"VA":g.key==="mgr"?"Manager":g.key==="regional"?"Regional":"Admin"}</span>
                   <Badge type={emp.VATrackerStatus==="Out"?"er":"ok"} dot={false}>{emp.VATrackerStatus||"Active"}</Badge>
                   {port.length>0&&<Badge type="ne" dot={false}>{port.length} props</Badge>}
-                  {emp.VATrackerRole&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",background:C.gold,color:C.teal,borderRadius:99}}>Role Override</span>}
+                  {emp.VATrackerRole&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",background:C.gold,color:C.teal,borderRadius:99}}>Role Override: {emp.VATrackerRole}</span>}
+                  {isSelf&&<em style={{fontSize:10,color:C.b4}}>You</em>}
                 </div>
+                {emp.VATrackerRole&&<div style={{fontSize:10,color:C.b4,marginTop:3}}>Job Title: {emp.JobTitle} · Tracker Role Override: <strong style={{color:C.t2}}>{emp.VATrackerRole}</strong></div>}
               </div>
               <div style={{display:"flex",gap:5,flexShrink:0}}>
+                <button style={{...ss.btnO(C.t2,C.b2),...ss.xs}} onClick={()=>{if(isEditing){setEditEmpId(null);}else{setEditEmpId(emp.id);setEName(emp.Name||"");setEEmail(emp.Email||"");setETitle(emp.JobTitle||"");setERole(emp.VATrackerRole||"");}}}>{isEditing?"Cancel":"Edit"}</button>
                 {detectRole(emp)==="va"&&<button style={{...ss.btnO(emp.VATrackerStatus==="Out"?C.ok:C.er,emp.VATrackerStatus==="Out"?`rgba(26,122,70,0.3)`:`rgba(184,59,42,0.3)`),...ss.xs}} onClick={()=>onToggleAbsence(emp)}>{emp.VATrackerStatus==="Out"?"Mark In":"Mark Out"}</button>}
               </div>
+            </div>
+            {isEditing&&<div style={{margin:0,padding:"11px 13px",background:C.tl00,border:`1px solid ${C.tl}`,borderBottom:`1px solid ${C.b1}`}}>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+                <div style={{flex:1,minWidth:140}}><label style={ss.label}>Name</label><input style={ss.input} value={eName} onChange={e=>setEName(e.target.value)}/></div>
+                <div style={{flex:1,minWidth:140}}><label style={ss.label}>Email</label><input style={ss.input} value={eEmail} onChange={e=>setEEmail(e.target.value)}/></div>
+              </div>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+                <div style={{flex:1,minWidth:140}}><label style={ss.label}>Job Title</label><select style={ss.select} value={eTitle} onChange={e=>setETitle(e.target.value)}><option>Virtual Assistant</option><option>Property Manager</option><option>Regional/Portfolio Manager</option><option>Owner/Operator</option></select></div>
+                <div style={{flex:1,minWidth:140}}><label style={{...ss.label,display:"flex",alignItems:"center",gap:5}}>Tracker Role Override <span style={{fontSize:9,fontWeight:700,padding:"1px 6px",background:C.gold,color:C.teal,borderRadius:99}}>KEY FIELD</span></label><select style={ss.select} value={eRole} onChange={e=>setERole(e.target.value)}><option value="">Auto — match job title</option><option value="va">va — task logging only</option><option value="manager">manager — see their properties</option><option value="regional">regional — portfolio overview + coaching</option><option value="admin">admin — full access to everything</option></select></div>
+              </div>
+              <div style={{background:C.wnb,border:"1px solid rgba(168,111,8,0.25)",borderRadius:6,padding:"9px 11px",fontSize:11,color:C.b6,marginBottom:10,lineHeight:1.6}}>
+                <strong style={{color:C.wn}}>⚠ Tracker Role overrides job title.</strong> Example: a "Property Manager" with role set to <strong>admin</strong> gets full admin access. A "Regional/Portfolio Manager" with role set to <strong>regional</strong> gets the coaching tab and portfolio overview. Leave blank to auto-assign from job title.
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button style={{...ss.btn(C.ok),...ss.xs}} onClick={()=>{const fields={};if(eName!==emp.Name)fields.Name=eName;if(eEmail!==emp.Email)fields.Email=eEmail;if(eTitle!==emp.JobTitle)fields.JobTitle=eTitle;if(eRole!==(emp.VATrackerRole||""))fields.VATrackerRole=eRole;if(Object.keys(fields).length===0){setEditEmpId(null);return;}onEditEmployee(emp.id,fields);setEditEmpId(null);}}>✓ Save</button>
+                <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>setEditEmpId(null)}>Cancel</button>
+              </div>
+            </div>}
             </div>;})}
         </div>)}
       </div>
@@ -884,14 +969,61 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
           <div style={{flex:2,minWidth:180}}><label style={ss.label}>to Property</label><select style={ss.select} value={portProp} onChange={e=>setPortProp(e.target.value)}><option value="">Select...</option>{data.properties.filter(p=>!portVa||!data.portfolios.some(pt=>pt.VAEmail?.toLowerCase()===portVa.toLowerCase()&&pt.PropertyId===p.Title)).map(p=>{const a=data.portfolios.find(pt=>pt.PropertyId===p.Title);return<option key={p.Title} value={p.Title}>{p.PropertyName} ({p.Units}u){a?` — ${a.VAName}`:""}</option>;})}</select></div>
           <button style={{...ss.btn(C.ok),...ss.xs,opacity:(!portVa||!portProp)?0.5:1}} onClick={()=>{if(!portVa||!portProp)return;const va=data.vas.find(v=>v.Email===portVa);onAssignProp(portVa,va?.Name||portVa,portProp);setPortProp("");}}>Assign →</button>
         </div>
-        {/* Property list with VA assignments */}
+        {/* Property list with VA assignments — editable */}
         <div style={{borderRadius:8,border:`1px solid ${C.b1}`,overflow:"hidden"}}>
-          <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["Property","Group","Units","PM","VA",""].map(h=><th key={h} style={ss.th}>{h}</th>)}</tr></thead><tbody>
-            {data.properties.map(p=>{const port=data.portfolios.find(pt=>pt.PropertyId===p.Title);const va=port?data.vas.find(v=>v.Email?.toLowerCase()===port.VAEmail?.toLowerCase()):null;
-              return<tr key={p.id}><td style={{...ss.td,fontWeight:700,color:C.t2}}>{p.PropertyName}</td><td style={{...ss.td,fontSize:11}}>{p.PropertyGroup}</td><td style={ss.td}>{p.Units}</td><td style={{...ss.td,fontSize:11}}>{p.PMName}</td>
-                <td style={ss.td}>{va?<div style={{display:"flex",alignItems:"center",gap:5}}><Avatar name={va.Name} size={20}/><span style={{fontSize:11}}>{va.Name}</span></div>:<Badge type="er" dot={false}>Unassigned</Badge>}</td>
-                <td style={ss.td}>{port&&<button style={{...ss.btnO(C.er,`rgba(184,59,42,0.3)`),...ss.xs}} onClick={()=>{if(window.confirm(`Remove ${va?.Name} from ${p.PropertyName}?`))onUnassignProp(port.id,p.PropertyName,va?.Name||"VA");}}>Remove</button>}</td></tr>;})}
-          </tbody></table>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 50px 1.5fr 1.5fr 80px",gap:0,background:C.tl00,borderBottom:`1px solid ${C.b1}`}}>
+            {["Property","Group","Units","PM","VA",""].map(h=><div key={h} style={{padding:"8px 11px",fontSize:11,fontWeight:700,color:C.t2}}>{h}</div>)}
+          </div>
+          {data.properties.map(p=>{const port=data.portfolios.find(pt=>pt.PropertyId===p.Title);const va=port?data.vas.find(v=>v.Email?.toLowerCase()===port.VAEmail?.toLowerCase()):null;const isEd=editPropId===p.id;
+            return<div key={p.id} style={{borderBottom:`1px solid ${C.b1}`}}>
+              <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 50px 1.5fr 1.5fr 80px",gap:0,alignItems:"center",background:!va?"rgba(184,59,42,0.03)":"transparent"}}>
+                <div style={{padding:"9px 11px",fontSize:12,fontWeight:700,color:!va?C.er:C.t2}}>{p.PropertyName}</div>
+                <div style={{padding:"9px 11px",fontSize:12,color:C.b6}}>{p.PropertyGroup}</div>
+                <div style={{padding:"9px 11px",fontSize:12,color:C.b6}}>{p.Units}</div>
+                <div style={{padding:"9px 11px",fontSize:12,color:C.b6}}>{p.PMName}</div>
+                <div style={{padding:"9px 11px"}}>{va?<div style={{display:"flex",alignItems:"center",gap:5}}><Avatar name={va.Name} size={20}/><span style={{fontSize:11,color:C.b6}}>{va.Name}</span></div>:<Badge type="er" dot={false}>No VA assigned</Badge>}</div>
+                <div style={{padding:"9px 11px"}}><button style={{...ss.btnO(C.t2,C.b2),...ss.xs}} onClick={()=>{if(isEd){setEditPropId(null);}else{setEditPropId(p.id);setEpName(p.PropertyName||"");setEpUnits(String(p.Units||0));setEpGroup(p.PropertyGroup||"Multifamily");setEpPm(p.PMEmail||"");setEpVa(port?.VAEmail||"");}}}>{isEd?"Cancel":"✎ Edit"}</button></div>
+              </div>
+              {isEd&&<div style={{padding:"10px 12px",background:C.tl00,borderTop:`1px solid ${C.b1}`}}>
+                <div style={{fontSize:11,fontWeight:700,color:C.t3,marginBottom:8}}>Edit {p.PropertyName}</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                  <div style={{flex:2,minWidth:150}}><label style={ss.label}>Property Name</label><input style={ss.input} value={epName} onChange={e=>setEpName(e.target.value)}/></div>
+                  <div style={{flex:1,minWidth:100}}><label style={ss.label}>Group</label><select style={ss.select} value={epGroup} onChange={e=>setEpGroup(e.target.value)}><option>Multifamily</option><option>Single Family</option><option>Lease-Up</option></select></div>
+                  <div style={{flex:0,minWidth:70}}><label style={ss.label}>Units</label><input style={ss.input} type="number" value={epUnits} onChange={e=>setEpUnits(e.target.value)}/></div>
+                </div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+                  <div style={{flex:1,minWidth:180}}><label style={ss.label}>Property Manager</label><select style={ss.select} value={epPm} onChange={e=>setEpPm(e.target.value)}>
+                    <optgroup label="Admins / Regional">{data.employees.filter(e=>["admin","regional"].includes(detectRole(e))&&e.EmployeeActive!==false).map(e=><option key={e.Email} value={e.Email}>{e.Name} ({detectRole(e)})</option>)}</optgroup>
+                    <optgroup label="Property Managers">{data.pms.filter(e=>e.JobTitle==="Property Manager").map(pm=><option key={pm.Email} value={pm.Email}>{pm.Name}</option>)}</optgroup>
+                  </select></div>
+                  <div style={{flex:1,minWidth:180}}><label style={ss.label}>VA Assigned</label><select style={ss.select} value={epVa} onChange={e=>setEpVa(e.target.value)}>
+                    <option value="">— Unassign VA —</option>
+                    {data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}{v.VATrackerStatus==="Out"?" (OUT)":""}</option>)}
+                  </select></div>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <button style={{...ss.btn(C.ok),...ss.xs}} onClick={async()=>{
+                    // 1. Update property fields if changed
+                    const propFields={};
+                    if(epName!==p.PropertyName)propFields.PropertyName=epName;
+                    if(parseInt(epUnits)!==p.Units)propFields.Units=parseInt(epUnits)||p.Units;
+                    if(epGroup!==p.PropertyGroup)propFields.PropertyGroup=epGroup;
+                    if(epPm!==(p.PMEmail||"")){propFields.PMEmail=epPm;const pm2=data.employees.find(e=>e.Email===epPm);propFields.PMName=pm2?.Name||epPm;}
+                    if(Object.keys(propFields).length>0)onEditProperty(p.id,propFields);
+                    // 2. Handle VA reassignment with full cascade
+                    const oldVaEmail=(port?.VAEmail||"").toLowerCase();
+                    const newVaEmail=epVa.toLowerCase();
+                    if(oldVaEmail!==newVaEmail){
+                      const nv=newVaEmail?data.vas.find(v=>v.Email?.toLowerCase()===newVaEmail):null;
+                      await onReassignVA(p.Title,oldVaEmail,newVaEmail,nv?.Name||"");
+                    }
+                    setEditPropId(null);
+                  }}>✓ Save Changes</button>
+                  <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>setEditPropId(null)}>Cancel</button>
+                  {port&&<button style={{...ss.btnO(C.er,`rgba(184,59,42,0.3)`),...ss.xs,marginLeft:"auto"}} onClick={()=>{if(window.confirm(`Remove ${va?.Name} from ${p.PropertyName}?`)){onUnassignProp(port.id,p.PropertyName,va?.Name||"VA");setEditPropId(null);}}}>Remove VA Assignment</button>}
+                </div>
+              </div>}
+            </div>;})}
         </div>
         {/* Unassigned warning */}
         {(()=>{const aIds=new Set(data.portfolios.map(p=>p.PropertyId));const un=data.properties.filter(p=>!aIds.has(p.Title));if(!un.length)return null;
@@ -943,6 +1075,26 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
         {data.vas.map(va=>{const vq=queue.filter(t=>t.VAEmail?.toLowerCase()===va.Email.toLowerCase());if(!vq.length)return null;
           return<div key={va.Email} style={{marginBottom:10}}><div style={ss.sec}>{va.Name} ({vq.length})</div>{vq.map(t=><TaskRow key={t._localId} task={t} onDelete={onDeleteTask}/>)}</div>;})}
       </div>}
+      {/* Data Management */}
+      <div style={{...ss.card,borderTop:`3px solid ${C.wn}`}}>
+        <div style={ss.cardT}>🗂 Data Management</div>
+        <div style={{...ss.cardS,marginBottom:12}}>Control which activity data is visible in the tracker. Old data stays in SharePoint but is hidden from all views.</div>
+        <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:6,marginBottom:10}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.t2}}>Data Start Date</div>
+            <div style={{fontSize:10,color:C.b4,marginTop:2}}>{config?.dataStartDate?`Showing activity from ${fD(config.dataStartDate)} onward. Everything before is hidden.`:"No cutoff set — showing all historical activity."}</div>
+          </div>
+          {config?.dataStartDate&&<Badge type="wn" dot={false}>Filtered from {fD(config.dataStartDate)}</Badge>}
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end",marginBottom:10}}>
+          <button style={ss.btn(C.wn)} onClick={()=>{if(!window.confirm("Reset data to start fresh from today?\n\nThis hides ALL activity before today from every tab — Dashboard, History, Scorecard, Coaching, everything.\n\nThe old data is NOT deleted from SharePoint. You can undo this by clearing the start date."))return;onUpdateConfig({...config,dataStartDate:today()});}}>🔄 Start Fresh from Today</button>
+          <button style={ss.btnO(C.t2,C.b2)} onClick={()=>{const d=prompt("Enter custom start date (YYYY-MM-DD):",config?.dataStartDate||today());if(!d)return;if(!/^\d{4}-\d{2}-\d{2}$/.test(d)){alert("Use YYYY-MM-DD format");return;}onUpdateConfig({...config,dataStartDate:d});}}>📅 Set Custom Date</button>
+          {config?.dataStartDate&&<button style={ss.btnO(C.er,`rgba(184,59,42,0.3)`)} onClick={()=>{if(!window.confirm("Remove the data cutoff? All historical activity will be visible again."))return;const nc={...config};delete nc.dataStartDate;onUpdateConfig(nc);}}>✕ Clear Cutoff</button>}
+        </div>
+        {config?.dataStartDate&&<div style={{background:C.wnb,border:"1px solid rgba(168,111,8,0.25)",borderRadius:6,padding:"8px 11px",fontSize:11,color:C.b6,lineHeight:1.6}}>
+          <strong style={{color:C.wn}}>Note:</strong> This only hides data from the app's views. The records still exist in SharePoint's VA_Activity list. To permanently delete old records, do that directly in SharePoint. To undo this filter, click "Clear Cutoff" above.
+        </div>}
+      </div>
       {/* Data Sources */}
       <div style={{background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:6,padding:9,fontSize:11,color:C.b4}}><strong style={{color:C.t2}}>Data:</strong> Employees → VAs/PMs/Roles. VA_Properties → registry. VA_Portfolios → assignments. VA_TrackerConfig → categories/recurring. VA_Activity → tasks/shifts/absences. Auth: MSAL.</div>
     </div>}
