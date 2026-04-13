@@ -12,7 +12,9 @@ const CONFIG = {
   clientId: "32e75ffa-747a-4cf0-8209-6a19150c4547",
   tenantId: "33575d04-ca7b-4396-8011-9eaea4030b46",
   siteId: "vanrockre.sharepoint.com,a02c1cd8-9f1f-4827-8286-7b6b7ce74232,01202419-6625-4499-b0d5-8ceb1cffdba3",
+  workerUrl: "https://va-tracker-guest.newshire-pm.workers.dev",
   appName: "VA PRODUCTIVITY TRACKER",
+  teamsEnabled: true,
 };
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE = `${GRAPH}/sites/${CONFIG.siteId}`;
@@ -24,11 +26,12 @@ const SCOPES = ["Sites.ReadWrite.All", "User.Read"];
 const ROLE_MAP = {
   "Virtual Assistant": "va",
   "Property Manager": "manager",
-  "Regional/Portfolio Manager": "admin",
+  "Regional/Portfolio Manager": "regional",
   "Owner/Operator": "admin",
 };
 function detectRole(emp) {
-  if (emp.VATrackerRole) return emp.VATrackerRole.toLowerCase();
+  const r=(emp.VATrackerRole||"").toLowerCase().trim();
+  if(["va","manager","regional","admin"].includes(r))return r;
   return ROLE_MAP[emp.JobTitle] || null;
 }
 
