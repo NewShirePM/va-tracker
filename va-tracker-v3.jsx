@@ -48,12 +48,13 @@ function iUrl(n,id){return`${SITE}/lists/${n}/items/${id}/fields`;}
 async function safeGet(token,name,url){try{const r=await gAll(token,url);return r;}catch(e){console.warn(`[VT] ${name} failed:`,e.message);return[];}}
 
 async function loadAll(token){
-  const[eR,cR,pR,ptR,aR]=await Promise.all([
+  const[eR,cR,pR,ptR,aR,gR]=await Promise.all([
     safeGet(token,"Employees",`${lUrl("Employees")}?expand=fields&$top=200`),
     safeGet(token,"Config",`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
     safeGet(token,"Properties",`${lUrl("VA_Properties")}?expand=fields&$top=200`),
     safeGet(token,"Portfolios",`${lUrl("VA_Portfolios")}?expand=fields&$top=200`),
     safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=1000`),
+    safeGet(token,"Guests",`${lUrl("VA_Guests")}?expand=fields&$top=200`),
   ]);
   const employees=eR.map(e=>({id:e.id,...e.fields}));
   const config=cR.length>0?JSON.parse(cR[0].fields.ConfigJSON||"{}"):{};
@@ -64,8 +65,9 @@ async function loadAll(token){
   const cutoff=config.dataStartDate||null;
   const activities=cutoff?allActs.filter(a=>{const d=a.ActivityDate||a.StartTime||"";return d>=cutoff;}):allActs;
   const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant"&&e.EmployeeActive!==false);
+  const guests=gR.map(g=>({id:g.id,...g.fields})).filter(g=>g.IsActive!==false);
   const pms=employees.filter(e=>(e.JobTitle==="Property Manager"||e.JobTitle==="Regional/Portfolio Manager"||e.JobTitle==="Owner/Operator")&&e.EmployeeActive!==false);
-  return{employees,config,properties,portfolios,activities,vas,pms};
+  return{employees,config,properties,portfolios,activities,vas,pms,guests};
 }
 
 // ── MSAL ──
@@ -239,6 +241,25 @@ function App(){
   async function deleteTask(task){
     if(task._spId){try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",task._spId),{Status:"Incomplete",Notes:"Removed by admin"});}catch(e){fl("Error: "+e.message);return;}}
     setQueue(p=>p.filter(t=>t._localId!==task._localId));setCovQ(p=>p.filter(t=>t._localId!==task._localId));fl("Task removed");
+  }
+
+  // ── Review request (VA → Manager) ──
+  async function sendReview(task,note){
+    try{const tk=await gT();
+      await gPost(tk,lUrl("VA_Activity"),{Title:`Review-${task.Title}`,ActivityType:"Review",VAEmail:task.VAEmail||myEmail,VAName:task.VAName||myEmp?.Name||myEmail,ActivityDate:new Date().toISOString(),PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category||"",Notes:note,Status:"Pending",AssignedByEmail:myEmail,AssignedByName:myEmp?.Name||myEmail,GroupId:task._spId||task._localId||task.Title});
+      fl("Review request sent to PM!");await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+  async function resolveReview(reviewId){
+    try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",reviewId),{Status:"Resolved"});fl("Review resolved!");await reload();}catch(e){fl("Error: "+e.message);}
+  }
+
+  // ── Coaching notes ──
+  async function saveCoachingNote(vaEmail,vaName,note){
+    try{const tk=await gT();
+      await gPost(tk,lUrl("VA_Activity"),{Title:`Coaching-${vaName}-${today()}`,ActivityType:"CoachingNote",VAEmail:vaEmail,VAName:vaName,ActivityDate:new Date().toISOString(),Notes:note,Status:"Completed",AssignedByEmail:myEmail,AssignedByName:myEmp?.Name||myEmail});
+      fl("Coaching note saved!");await reload();
+    }catch(e){fl("Error: "+e.message);}
   }
 
   // ── Interruption logging ──
@@ -471,10 +492,10 @@ function App(){
       {flash&&<div style={{background:C.gl0,borderBottom:`1px solid ${C.gold}`,padding:"7px 18px",fontSize:12,fontWeight:600,color:C.g2,textAlign:"center"}}>{flash}</div>}
       {/* Content */}
       <div style={ss.content}>
-        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} isAdmin={isAdmin} fl={fl}/>}
-        {ck==="mgr"&&<ManagerView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
+        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} reviews={data.activities.filter(a=>a.ActivityType==="Review")} isAdmin={isAdmin} fl={fl}/>}
+        {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
-        {ck==="coach"&&<CoachingView data={data}/>}
+        {ck==="coach"&&<CoachingView data={data} onSaveNote={saveCoachingNote}/>}
         {ck==="hist"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
         {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
       </div>
@@ -486,7 +507,7 @@ function App(){
 // ══════════════════════════════════════════════════════
 // MY DAY VIEW
 // ══════════════════════════════════════════════════════
-function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,onLogInterruption,onSubmitMetrics,isAdmin,fl}){
+function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,onLogInterruption,onSubmitMetrics,onSendReview,onResolveReview,reviews,isAdmin,fl}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   // Interruption state
   const[iType,setIType]=useState("Prospect Call");const[iProp,setIProp]=useState("");const[iDur,setIDur]=useState("");const[iNotes,setINotes]=useState("");const[iConvert,setIConvert]=useState(false);const[iCat,setICat]=useState("");const[iPri,setIPri]=useState("Normal");const[iTaskDesc,setITaskDesc]=useState("");
@@ -505,8 +526,26 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
     onAddTask({Title:fDesc,VAEmail:myEmail,VAName:myVa?.Name||myEmail,PropertyId:fProp||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Priority:fPri,Source:"Ad-Hoc"});
     setFDesc("");setFCat("");setFProp("");setFPri("Normal");setShowForm(false);}
 
-  return(<div style={{maxWidth:700,margin:"0 auto"}}>
-    {/* Shift Clock */}
+  // Review request handler
+  const[revTask,setRevTask]=useState(null);const[revNote,setRevNote]=useState("");
+
+  // Active notices
+  const activeNotices=(config?.notices||[]).filter(n=>{const td=today();return n.startDate<=td&&n.endDate>=td;});
+
+  return(<div style={{maxWidth:1100,margin:"0 auto"}}>
+    {/* Notice Banner */}
+    {activeNotices.length>0&&<div style={{marginBottom:12}}>
+      {activeNotices.map((n,i)=><div key={i} style={{background:C.gl,border:`1px solid ${C.gold}`,borderLeft:`4px solid ${C.gold}`,borderRadius:8,padding:"10px 14px",marginBottom:i<activeNotices.length-1?6:0,display:"flex",alignItems:"flex-start",gap:10}}>
+        <span style={{fontSize:16,flexShrink:0}}>📢</span>
+        <div style={{flex:1}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.g2}}>{n.title||"Notice"}</div>
+          <div style={{fontSize:12,color:C.t2,marginTop:2,lineHeight:1.5}}>{n.text}</div>
+          <div style={{fontSize:9,color:C.b4,marginTop:4}}>Posted by {n.createdBy||"Admin"} · {fD(n.startDate)} – {fD(n.endDate)}</div>
+        </div>
+      </div>)}
+    </div>}
+
+    {/* Shift Clock — full width */}
     <div style={{background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:8,padding:14,marginBottom:12,boxShadow:"0 1px 3px rgba(28,55,64,0.07)"}}>
       {!shift?(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:11,fontWeight:700,color:C.b4,textTransform:"uppercase"}}>Shift Clock</div><div style={{fontSize:10,color:C.b4,marginTop:1}}>Not clocked in</div></div><button style={ss.btn(C.inf)} onClick={onClockIn}>☀ Clock In</button></div>
       ):(<div>
@@ -520,6 +559,48 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
           <button style={{...ss.btnO(C.er,`rgba(184,59,42,0.3)`),flex:1}} onClick={onClockOut}>🌙 Clock Out</button>
         </div></div>)}
     </div>
+
+    {/* Review Panel — threaded, multiple per task */}
+    {revTask&&(()=>{
+      const taskKey=revTask._spId||revTask._localId||revTask.Title;
+      const taskReviews=(reviews||[]).filter(r=>r.GroupId===taskKey).sort((a,b)=>(a.ActivityDate||"").localeCompare(b.ActivityDate||""));
+      const pending=taskReviews.filter(r=>r.Status==="Pending").length;
+      return<div style={{...ss.card,borderTop:`3px solid ${C.pu}`,marginBottom:12,padding:0,overflow:"hidden"}}>
+        <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.b1}`}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.pu}}>⚑ Manager Review — {revTask.Title}</div>
+          <div style={{fontSize:10,color:C.b4,marginTop:2}}>{revTask.PropertyName} · {revTask.PMName||"PM"} · {taskReviews.length} request{taskReviews.length!==1?"s":""}{pending>0?` · ${pending} pending`:""}</div>
+        </div>
+        {/* Existing thread */}
+        {taskReviews.length>0&&<div style={{padding:"10px 14px",background:C.pub,maxHeight:200,overflowY:"auto"}}>
+          {taskReviews.map((r,i)=><div key={i} style={{display:"flex",gap:8,marginBottom:i<taskReviews.length-1?9:0}}>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:r.Status==="Resolved"?C.ok:C.wn,marginTop:3,flexShrink:0}}/>
+              {i<taskReviews.length-1&&<div style={{width:2,flex:1,background:"rgba(91,63,168,0.15)",marginTop:3,minHeight:12}}/>}
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.t2,display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                {r.VAName||"VA"} <span style={{fontSize:9,color:C.b4}}>{fD(r.ActivityDate)} {fT(r.ActivityDate)}</span>
+                <Badge type={r.Status==="Resolved"?"ok":"wn"} dot={false}>{r.Status}</Badge>
+              </div>
+              <div style={{fontSize:11,color:C.b6,background:C.white,border:"1px solid rgba(91,63,168,0.15)",borderRadius:6,padding:"6px 8px",marginTop:4,lineHeight:1.5}}>{r.Notes}</div>
+            </div>
+          </div>)}
+        </div>}
+        {/* New review request */}
+        <div style={{padding:"12px 14px"}}>
+          <textarea style={{...ss.input,minHeight:50,marginBottom:8}} value={revNote} onChange={e=>setRevNote(e.target.value)} placeholder={taskReviews.length>0?"Add another review request...":"What do you need from the PM?"}/>
+          <div style={{display:"flex",gap:6}}>
+            <button style={{...ss.btn(C.pu),flex:1}} onClick={()=>{if(!revNote){fl("Enter a note");return;}onSendReview(revTask,revNote);setRevNote("");}}>⚑ {taskReviews.length>0?"Add Review Request":"Send Review Request"}</button>
+            <button style={{...ss.btnO(C.b4,C.b2)}} onClick={()=>{setRevTask(null);setRevNote("");}}>Close</button>
+          </div>
+        </div>
+      </div>;
+    })()}
+
+    {/* Two-column layout */}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}} className="myday-grid">
+    {/* LEFT COLUMN — Tasks */}
+    <div style={{minWidth:0}}>
 
     {/* Active Timers — inline */}
     {myTimers.map(t=>{const now=Date.now(),st=new Date(t.StartTime).getTime();let pMs=t._pMs||0;const ip=!!t._pS;if(ip)pMs+=(now-t._pS);const el=ip?Math.floor((t._pS-st-(t._pMs||0))/1000):Math.floor((now-st-pMs)/1000);
@@ -561,8 +642,13 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
         <Badge type="ne" dot={false}>{myTasks.length} remaining</Badge>
       </div>
       {myTasks.length===0&&<div style={{textAlign:"center",padding:"20px 0",color:C.b4,fontSize:12}}>All done! 🎉</div>}
-      {myTasks.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)} onDelete={isAdmin?onDeleteTask:null} showVA={isAdmin}/>)}
+      {myTasks.map(t=>{const rc=(reviews||[]).filter(r=>r.GroupId===(t._spId||t._localId||t.Title)&&r.Status==="Pending").length;return<TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)} onDelete={isAdmin?onDeleteTask:null} onReview={t2=>setRevTask(t2)} showVA={isAdmin} reviewCount={rc}/>})}
     </div>
+
+    </div>{/* end left column */}
+
+    {/* RIGHT COLUMN — Tools */}
+    <div style={{minWidth:0}}>
 
     {/* Interruption Logger */}
     <div style={{...ss.card,borderTop:`3px solid ${C.t3}`}}>
@@ -643,11 +729,13 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
         <button style={{...ss.btn(C.teal),width:"100%"}} onClick={handleAdd}>+ Queue</button>
       </div>}
     </div>
+    </div>{/* end right column */}
+    </div>{/* end grid */}
   </div>);
 }
 
 // ── Task Row ──
-function TaskRow({task,onStart,onDelete,showVA,isOverdue}){
+function TaskRow({task,onStart,onDelete,onReview,showVA,isOverdue,reviewCount=0}){
   return(<div style={{display:"flex",alignItems:"flex-start",gap:9,padding:"9px 0",borderBottom:`1px solid ${C.b1}`}}>
     <span style={{fontSize:15,width:22,textAlign:"center",flexShrink:0,paddingTop:1}}>{catIcon[task.Category]||"📁"}</span>
     <div style={{flex:1,minWidth:0}}>
@@ -656,6 +744,7 @@ function TaskRow({task,onStart,onDelete,showVA,isOverdue}){
         {task.CoverageForName&&<Badge type="wn" dot={false}>Coverage</Badge>}
         {task.Priority==="Urgent"&&<Badge type="er" dot={false}>Urgent</Badge>}
         {task.Priority==="High"&&<Badge type="wn" dot={false}>High</Badge>}
+        {reviewCount>0&&<Badge type="pu" dot={false}>{reviewCount} review{reviewCount>1?"s":""}</Badge>}
       </div>
       <div style={{fontSize:10,color:C.b4,marginTop:3,display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
         {showVA&&task.VAName&&<>{task.VAName}<Dot/></>}
@@ -665,6 +754,7 @@ function TaskRow({task,onStart,onDelete,showVA,isOverdue}){
     </div>
     <div style={{display:"flex",gap:4,flexShrink:0,flexWrap:"wrap",alignItems:"flex-start"}}>
       {onStart&&<button style={{...ss.btn(C.ok),...ss.xs}} onClick={onStart}>▶ Start</button>}
+      {onReview&&<button style={{...ss.btn(C.pu),...ss.xs}} onClick={()=>onReview(task)}>⚑</button>}
       {onDelete&&<button style={{...ss.btnO(C.er,`rgba(184,59,42,0.3)`),...ss.xs}} onClick={()=>{if(window.confirm("Remove?"))onDelete(task);}}>✕</button>}
     </div>
   </div>);
@@ -825,8 +915,8 @@ function DashboardView({data,queue,timers,covQ,overdue,dfFrom,dfTo,setDfFrom,set
 // ══════════════════════════════════════════════════════
 // COACHING VIEW
 // ══════════════════════════════════════════════════════
-function CoachingView({data}){
-  const[selVa,setSelVa]=useState("");const[period,setPeriod]=useState(7);
+function CoachingView({data,onSaveNote}){
+  const[selVa,setSelVa]=useState("");const[period,setPeriod]=useState(7);const[cNote,setCNote]=useState("");
   if(!data)return null;
   const va=data.vas.find(v=>v.Email?.toLowerCase()===(selVa||data.vas[0]?.Email||"").toLowerCase());
   const vaEmail=va?.Email?.toLowerCase()||"";
@@ -871,6 +961,26 @@ function CoachingView({data}){
       </div>)}
     </div>}
     {blocked.length>0&&<div style={{...ss.card,borderTop:`3px solid ${C.er}`}}><div style={{...ss.cardT,color:C.er,marginBottom:10}}>⚠ Blocked Tasks</div>{blocked.map((t,i)=><div key={i} style={{padding:"5px 0",borderBottom:`1px solid ${C.b1}`}}><div style={{fontSize:12,fontWeight:600,color:C.t2}}>{t.Title}</div><div style={{fontSize:10,color:C.b4}}>{t.PropertyName}{t.Notes?` · ${t.Notes}`:""}</div></div>)}</div>}
+
+    {/* Coaching Notes */}
+    <div style={{...ss.card,borderTop:`3px solid ${C.gold}`}}>
+      <div style={ss.cardT}>Coaching Notes <span style={{fontSize:10,fontWeight:400,color:C.b4}}>— admin only, not visible to VA</span></div>
+      <div style={{marginTop:10}}>
+        <textarea style={{...ss.input,minHeight:70,marginBottom:8}} value={cNote} onChange={e=>setCNote(e.target.value)} placeholder={`Add a coaching note for ${va?.Name||"this VA"}...`}/>
+        <button style={{...ss.btn(C.teal),...ss.sm}} onClick={()=>{if(!cNote.trim())return;onSaveNote(vaEmail,va?.Name||"",cNote);setCNote("");}}>Save Note</button>
+      </div>
+      {(()=>{const notes=data.activities.filter(a=>a.ActivityType==="CoachingNote"&&a.VAEmail?.toLowerCase()===vaEmail).sort((a,b)=>(b.ActivityDate||"").localeCompare(a.ActivityDate||""));
+        if(!notes.length)return<div style={{marginTop:10,fontSize:11,color:C.b4,fontStyle:"italic"}}>No coaching notes yet.</div>;
+        return<div style={{marginTop:12}}><div style={{fontSize:10,fontWeight:700,color:C.b4,textTransform:"uppercase",marginBottom:6}}>History</div>
+          {notes.slice(0,20).map((n,i)=><div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${C.b1}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <span style={{fontSize:10,fontWeight:700,color:C.t2}}>{n.AssignedByName||"Admin"}</span>
+              <span style={{fontSize:9,color:C.b4}}>{fD(n.ActivityDate)} {fT(n.ActivityDate)}</span>
+            </div>
+            <div style={{fontSize:12,color:C.b6,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{n.Notes}</div>
+          </div>)}</div>;
+      })()}
+    </div>
   </div>);
 }
 
@@ -899,6 +1009,63 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps}){
 }
 
 // ══════════════════════════════════════════════════════
+// NOTICE MANAGER COMPONENT
+// ══════════════════════════════════════════════════════
+function NoticeManager({config,onUpdateConfig}){
+  const[showAdd,setShowAdd]=useState(false);const[nTitle,setNTitle]=useState("");const[nText,setNText]=useState("");
+  const[nStart,setNStart]=useState(today());const[nEnd,setNEnd]=useState(()=>{const d=new Date();d.setDate(d.getDate()+7);return d.toISOString().slice(0,10);});
+  const notices=config?.notices||[];
+  const td=today();
+
+  function addNotice(){
+    if(!nText.trim())return;
+    const n={id:Date.now().toString(36),title:nTitle||"Notice",text:nText,startDate:nStart,endDate:nEnd,createdBy:"Admin",createdAt:new Date().toISOString()};
+    onUpdateConfig({...config,notices:[...notices,n]});
+    setNTitle("");setNText("");setShowAdd(false);
+  }
+  function removeNotice(id){if(!window.confirm("Remove this notice?"))return;onUpdateConfig({...config,notices:notices.filter(n=>n.id!==id)});}
+
+  return(<div>
+    {/* Active notices */}
+    {notices.filter(n=>n.startDate<=td&&n.endDate>=td).map(n=><div key={n.id} style={{background:C.gl,border:`1px solid ${C.gold}`,borderLeft:`4px solid ${C.gold}`,borderRadius:6,padding:"10px 12px",marginBottom:8,display:"flex",alignItems:"flex-start",gap:10}}>
+      <span style={{fontSize:14}}>📢</span>
+      <div style={{flex:1}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.g2}}>{n.title}</div>
+        <div style={{fontSize:11,color:C.t2,marginTop:2,lineHeight:1.5}}>{n.text}</div>
+        <div style={{fontSize:9,color:C.b4,marginTop:3}}>{fD(n.startDate)} – {fD(n.endDate)} · {n.createdBy}</div>
+      </div>
+      <div style={{display:"flex",gap:4,flexShrink:0}}><Badge type="ok" dot={false}>Live</Badge><button style={{...ss.btnO(C.er,"rgba(184,59,42,0.3)"),...ss.xs}} onClick={()=>removeNotice(n.id)}>✕</button></div>
+    </div>)}
+
+    {/* Scheduled / expired notices */}
+    {notices.filter(n=>n.endDate<td||n.startDate>td).map(n=><div key={n.id} style={{padding:"8px 12px",borderBottom:`1px solid ${C.b1}`,display:"flex",alignItems:"center",gap:10,opacity:n.endDate<td?0.5:0.8}}>
+      <div style={{flex:1}}>
+        <div style={{fontSize:11,fontWeight:600,color:C.t2}}>{n.title}: {n.text.slice(0,60)}{n.text.length>60?"...":""}</div>
+        <div style={{fontSize:9,color:C.b4}}>{fD(n.startDate)} – {fD(n.endDate)} · {n.endDate<td?"Expired":"Scheduled"}</div>
+      </div>
+      <Badge type={n.endDate<td?"ne":"in"} dot={false}>{n.endDate<td?"Expired":"Scheduled"}</Badge>
+      <button style={{...ss.btnO(C.er,"rgba(184,59,42,0.3)"),...ss.xs}} onClick={()=>removeNotice(n.id)}>✕</button>
+    </div>)}
+
+    {/* Add notice form */}
+    {!showAdd?<button style={{...ss.btn(C.gold,C.teal),...ss.sm,marginTop:8}} onClick={()=>setShowAdd(true)}>+ Add Notice</button>
+    :<div style={{background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:6,padding:12,marginTop:8}}>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+        <div style={{flex:2,minWidth:150}}><label style={ss.label}>Title</label><input style={ss.input} value={nTitle} onChange={e=>setNTitle(e.target.value)} placeholder="e.g. Reminder, Update, Important"/></div>
+        <div style={{flex:1,minWidth:120}}><label style={ss.label}>Start Date</label><input style={ss.input} type="date" value={nStart} onChange={e=>setNStart(e.target.value)}/></div>
+        <div style={{flex:1,minWidth:120}}><label style={ss.label}>End Date</label><input style={ss.input} type="date" value={nEnd} onChange={e=>setNEnd(e.target.value)}/></div>
+      </div>
+      <label style={ss.label}>Message *</label>
+      <textarea style={{...ss.input,minHeight:60,marginBottom:8}} value={nText} onChange={e=>setNText(e.target.value)} placeholder="What do you need the team to know?"/>
+      <div style={{display:"flex",gap:6}}>
+        <button style={{...ss.btn(C.ok),...ss.sm}} onClick={addNotice}>✓ Post Notice</button>
+        <button style={{...ss.btnO(C.b4,C.b2),...ss.sm}} onClick={()=>{setShowAdd(false);setNTitle("");setNText("");}}>Cancel</button>
+      </div>
+    </div>}
+  </div>);
+}
+
+// ══════════════════════════════════════════════════════
 // ADMIN VIEW (with sub-navigation)
 // ══════════════════════════════════════════════════════
 function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
@@ -911,6 +1078,8 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   const[roleFilter,setRoleFilter]=useState("all");
   // Employee edit state
   const[editEmpId,setEditEmpId]=useState(null);const[eName,setEName]=useState("");const[eEmail,setEEmail]=useState("");const[eTitle,setETitle]=useState("");const[eRole,setERole]=useState("");
+  // Guest state
+  const[gName,setGName]=useState("");const[gEmail,setGEmail]=useState("");const[gCompany,setGCompany]=useState("");const[gVAs,setGVAs]=useState([]);
   // Property edit state
   const[editPropId,setEditPropId]=useState(null);const[epName,setEpName]=useState("");const[epUnits,setEpUnits]=useState("");const[epGroup,setEpGroup]=useState("");const[epPm,setEpPm]=useState("");const[epVa,setEpVa]=useState("");
   if(!data)return null;
@@ -932,7 +1101,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   function saveEdit(i){const u=[...rTasks];u[i]={...u[i],description:editDesc};saveRec(u);setEditIdx(null);}
 
   // Sub-nav tabs
-  const subTabs=[{k:"team",l:"👥 Team"},{k:"sched",l:"🔄 Recurring"},{k:"port",l:"🏠 Portfolio"},{k:"settings",l:"⚙ Settings"}];
+  const subTabs=[{k:"team",l:"👥 Team"},{k:"sched",l:"🔄 Recurring"},{k:"port",l:"🏠 Portfolio"},{k:"guests",l:"🔑 Guests"},{k:"settings",l:"⚙ Settings"}];
   // Group employees by role
   const emps=data.employees.filter(e=>e.EmployeeActive!==false);
   const roleGroups=[{key:"va",label:"Virtual Assistants",bg:C.tl0,fg:C.t2,emps:emps.filter(e=>detectRole(e)==="va")},{key:"mgr",label:"Property Managers",bg:C.gl,fg:C.g2,emps:emps.filter(e=>detectRole(e)==="manager")},{key:"regional",label:"Regional / Portfolio",bg:C.infb,fg:C.inf,emps:emps.filter(e=>detectRole(e)==="regional")},{key:"admin",label:"Admins",bg:C.erb,fg:C.er,emps:emps.filter(e=>detectRole(e)==="admin")}];
@@ -1120,8 +1289,62 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       </div>
     </div>}
 
+    {/* ── GUESTS ── */}
+    {sub==="guests"&&<div>
+      <div style={{...ss.card,borderTop:`3px solid ${C.gold}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+          <div><div style={ss.cardT}>🔑 Guest Access Management</div><div style={ss.cardS}>Give coordinators a read-only view of their VAs' activity — no Microsoft account needed</div></div>
+        </div>
+        {/* Add Guest Form */}
+        <div style={{background:C.gl,border:"1px solid rgba(205,160,75,0.3)",borderRadius:6,padding:12,marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.t2,marginBottom:10}}>+ Add Guest</div>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+            <div style={{flex:2,minWidth:140}}><label style={ss.label}>Full Name *</label><input style={ss.input} value={gName} onChange={e=>setGName(e.target.value)} placeholder="e.g. Jessica Park"/></div>
+            <div style={{flex:2,minWidth:140}}><label style={ss.label}>Email *</label><input style={ss.input} value={gEmail} onChange={e=>setGEmail(e.target.value)} placeholder="jessica@staffpro.com"/></div>
+            <div style={{flex:1,minWidth:120}}><label style={ss.label}>Company</label><input style={ss.input} value={gCompany} onChange={e=>setGCompany(e.target.value)} placeholder="StaffPro"/></div>
+          </div>
+          <div style={{marginBottom:10}}><label style={ss.label}>VAs this guest can see *</label>
+            <div style={{background:C.white,border:`1px solid ${C.b2}`,borderRadius:6,padding:8}}>
+              {data.vas.map(v=><label key={v.Email} style={{display:"flex",gap:6,fontSize:12,marginBottom:4,cursor:"pointer"}}><input type="checkbox" checked={gVAs.includes(v.Email)} onChange={()=>setGVAs(p=>p.includes(v.Email)?p.filter(x=>x!==v.Email):[...p,v.Email])}/>{v.Name}</label>)}
+            </div>
+          </div>
+          <div style={{background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:6,padding:"8px 11px",fontSize:11,color:C.b4,marginBottom:10,lineHeight:1.6}}>
+            <strong style={{color:C.t2}}>How it works:</strong> Guests get a unique URL with a token. They open it in any browser — no login required. They see a read-only Dashboard, History, and Scorecard filtered to only the VAs you assign.
+          </div>
+          <button style={{...ss.btn(C.ok),...ss.sm}} onClick={()=>{if(!gName||!gEmail||!gVAs.length){return;}
+            // TODO: Create guest record in VA_Guests + generate token URL
+            // For now, show what will be created
+            alert("Guest system requires the Cloudflare Worker to be deployed.\n\nGuest: "+gName+"\nEmail: "+gEmail+"\nVAs: "+gVAs.join(", "));
+            setGName("");setGEmail("");setGCompany("");setGVAs([]);
+          }}>✓ Add Guest & Generate URL</button>
+        </div>
+        {/* Existing Guests */}
+        {(()=>{const guests=(data.guests||[]).filter(g=>g.IsActive!==false);
+          if(!guests.length)return<div style={{textAlign:"center",padding:"20px 0",color:C.b4,fontSize:12}}>No guests configured yet. Add one above.</div>;
+          return guests.map((g,i)=><div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 0",borderBottom:`1px solid ${C.b1}`}}>
+            <Avatar name={g.GuestName} size={30} colorIdx={4}/>
+            <div style={{flex:1}}><div style={{fontSize:12,fontWeight:700}}>{g.GuestName}{g.Company?` — ${g.Company}`:""}</div><div style={{fontSize:10,color:C.b4,marginTop:1}}>VAs: {g.VAEmails||"none assigned"}</div>
+              <div style={{fontFamily:mono,fontSize:9,color:C.inf,background:C.infb,padding:"3px 7px",borderRadius:3,marginTop:4,display:"inline-block",wordBreak:"break-all"}}>…/va-tracker/?guest={g.Title}</div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+              <Badge type="ok" dot={false}>Active</Badge>
+              <button style={{...ss.btnO(C.t2,C.b2),...ss.xs}} onClick={()=>{navigator.clipboard?.writeText(window.location.origin+"/va-tracker/?guest="+g.Title);fl("URL copied!");}}>📋 Copy URL</button>
+            </div>
+          </div>);
+        })()}
+      </div>
+    </div>}
+
     {/* ── SETTINGS ── */}
     {sub==="settings"&&<div>
+      {/* Notice Banner Management */}
+      <div style={{...ss.card,borderTop:`3px solid ${C.gold}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+          <div><div style={ss.cardT}>📢 Notice Banner</div><div style={ss.cardS}>Post notices that appear at the top of every VA's My Day page</div></div>
+        </div>
+        <NoticeManager config={config} onUpdateConfig={onUpdateConfig}/>
+      </div>
+
       {/* Absence Management */}
       <div style={{...ss.card,borderTop:`3px solid ${C.er}`}}>
         <div style={ss.cardT}>🔒 Absence Management</div><div style={{...ss.cardS,marginBottom:12}}>Mark VAs out — their tasks move to coverage pool automatically</div>
