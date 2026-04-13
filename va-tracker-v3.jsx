@@ -241,6 +241,24 @@ function App(){
     setQueue(p=>p.filter(t=>t._localId!==task._localId));setCovQ(p=>p.filter(t=>t._localId!==task._localId));fl("Task removed");
   }
 
+  // ── Interruption logging ──
+  async function logInterruption(int){
+    try{const tk=await gT();
+      await gPost(tk,lUrl("VA_Activity"),{Title:`Interruption-${int.type}`,ActivityType:"Interruption",VAEmail:int.vaEmail,VAName:int.vaName,ActivityDate:new Date().toISOString(),PropertyId:int.propertyId||"",PropertyName:int.propertyName||"General",Category:int.type,DurationMin:int.duration||0,Notes:int.notes||"",Status:"Completed"});
+      // If convert-to-task, also create the task
+      if(int.task){await addTask(int.task);}
+      fl(`Interruption logged${int.task?" + task added":""}`);
+    }catch(e){fl("Error: "+e.message);}
+  }
+
+  // ── Daily metrics submit ──
+  async function submitDailyMetrics(metrics){
+    try{const tk=await gT();
+      await gPost(tk,lUrl("VA_Activity"),{Title:`Metrics-${myEmp?.Name||myEmail}-${today()}`,ActivityType:"DailyMetrics",VAEmail:myEmail,VAName:myEmp?.Name||myEmail,ActivityDate:new Date().toISOString(),Notes:JSON.stringify(metrics),Status:"Completed"});
+      fl("Daily metrics submitted!");
+    }catch(e){fl("Error: "+e.message);}
+  }
+
   // ── Timer actions ──
   async function startTimer(task){
     const timer={...task,Status:"In Progress",StartTime:new Date().toISOString(),_pMs:0,_pS:null};
@@ -453,7 +471,7 @@ function App(){
       {flash&&<div style={{background:C.gl0,borderBottom:`1px solid ${C.gold}`,padding:"7px 18px",fontSize:12,fontWeight:600,color:C.g2,textAlign:"center"}}>{flash}</div>}
       {/* Content */}
       <div style={ss.content}>
-        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} isAdmin={isAdmin} fl={fl}/>}
+        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} isAdmin={isAdmin} fl={fl}/>}
         {ck==="mgr"&&<ManagerView data={data} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
         {ck==="coach"&&<CoachingView data={data}/>}
@@ -468,8 +486,12 @@ function App(){
 // ══════════════════════════════════════════════════════
 // MY DAY VIEW
 // ══════════════════════════════════════════════════════
-function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,isAdmin,fl}){
+function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,onLogInterruption,onSubmitMetrics,isAdmin,fl}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
+  // Interruption state
+  const[iType,setIType]=useState("Prospect Call");const[iProp,setIProp]=useState("");const[iDur,setIDur]=useState("");const[iNotes,setINotes]=useState("");const[iConvert,setIConvert]=useState(false);const[iCat,setICat]=useState("");const[iPri,setIPri]=useState("Normal");const[iTaskDesc,setITaskDesc]=useState("");
+  // Daily metrics state
+  const[metrics,setMetrics]=useState({Leads:0,Apps:0,Showings:0,"Res. Comms":0,"WOs In":0,"WOs Upd.":0,Renewals:0,"Mgr Calls":0});const[mNotes,setMNotes]=useState("");const[mSubmitted,setMSubmitted]=useState(false);
   const cats=config?.categories||[];
   const portProps=data?data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===myEmail).map(p=>data.properties.find(pr=>pr.Title===p.PropertyId)).filter(Boolean):[];
   const myTasks=isAdmin?queue:queue.filter(t=>t.VAEmail?.toLowerCase()===myEmail);
@@ -540,6 +562,73 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
       </div>
       {myTasks.length===0&&<div style={{textAlign:"center",padding:"20px 0",color:C.b4,fontSize:12}}>All done! 🎉</div>}
       {myTasks.map(t=><TaskRow key={t._localId} task={t} onStart={()=>onStartTimer(t)} onDelete={isAdmin?onDeleteTask:null} showVA={isAdmin}/>)}
+    </div>
+
+    {/* Interruption Logger */}
+    <div style={{...ss.card,borderTop:`3px solid ${C.t3}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+        <div><div style={ss.cardT}>📞 Log Interruption</div><div style={ss.cardS}>{data.activities.filter(a=>a.ActivityType==="Interruption"&&a.VAEmail?.toLowerCase()===myEmail&&a.ActivityDate?.slice(0,10)===today()).length} logged today</div></div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:10}}>
+        {["Prospect Call","Resident Call","Vendor Call","Owner Call","Manager Call","Other"].map(t=>
+          <button key={t} style={{padding:"9px 4px",fontSize:10,fontWeight:iType===t?700:600,border:`1.5px solid ${iType===t?C.t3:C.b2}`,borderRadius:6,background:iType===t?C.tl0:C.white,color:iType===t?C.t2:C.b4,cursor:"pointer",textAlign:"center",lineHeight:1.35,fontFamily:fnt}} onClick={()=>setIType(t)}>{t.replace(" ","\n")}</button>)}
+      </div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div style={{flex:2,minWidth:120}}><label style={ss.label}>Property</label><select style={ss.select} value={iProp} onChange={e=>setIProp(e.target.value)}><option value="">General</option>{portProps.map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}</select></div>
+        <div style={{flex:1,minWidth:75}}><label style={ss.label}>Duration (min)</label><input style={ss.input} type="number" value={iDur} onChange={e=>setIDur(e.target.value)} placeholder="0"/></div>
+      </div>
+      <input style={{...ss.input,marginBottom:10}} value={iNotes} onChange={e=>setINotes(e.target.value)} placeholder="Notes (optional)"/>
+      {/* Convert to task toggle */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:6,marginBottom:iConvert?0:10,cursor:"pointer"}} onClick={()=>setIConvert(!iConvert)}>
+        <div><div style={{fontSize:12,fontWeight:700,color:C.t2}}>➕ Convert to Task</div><div style={{fontSize:10,color:C.b4,marginTop:1}}>Add a follow-up task to your queue from this interruption</div></div>
+        <div style={{width:40,height:22,background:iConvert?C.ok:C.b2,borderRadius:11,position:"relative",transition:"background 0.2s",flexShrink:0}}>
+          <div style={{position:"absolute",width:16,height:16,background:"#fff",borderRadius:"50%",top:3,left:iConvert?21:3,transition:"left 0.2s",boxShadow:"0 1px 2px rgba(0,0,0,0.15)"}}/>
+        </div>
+      </div>
+      {iConvert&&<div style={{background:C.tl0,border:`1px solid ${C.tl}`,borderRadius:"0 0 6px 6px",padding:12,marginBottom:10}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.t3,marginBottom:8,display:"flex",alignItems:"center",gap:5}}>📋 New Task from This Interruption</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+          <div style={{flex:1,minWidth:120}}><label style={ss.label}>Category</label><select style={ss.select} value={iCat} onChange={e=>setICat(e.target.value)}><option value="">Select...</option>{(config?.categories||[]).sort((a,b)=>a.name.localeCompare(b.name)).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <div style={{flex:1,minWidth:100}}><label style={ss.label}>Priority</label><select style={ss.select} value={iPri} onChange={e=>setIPri(e.target.value)}><option>Normal</option><option>High</option><option>Urgent</option></select></div>
+        </div>
+        <input style={{...ss.input,marginBottom:8}} value={iTaskDesc} onChange={e=>setITaskDesc(e.target.value)} placeholder="Task description"/>
+        <div style={{background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:6,padding:"8px 11px",fontSize:11,color:C.b4}}><strong style={{color:C.t2}}>On submit:</strong> ✓ Interruption logged + ✓ Task added to your queue</div>
+      </div>}
+      <button style={{...ss.btn(C.teal),width:"100%"}} onClick={()=>{
+        if(!iDur&&!iNotes){fl("Enter duration or notes");return;}
+        const prop=iProp?data.properties.find(p=>p.Title===iProp):null;
+        const cat=iCat?config?.categories?.find(c=>c.id===iCat):null;
+        const int={type:iType,vaEmail:myEmail,vaName:myVa?.Name||myEmail,propertyId:iProp,propertyName:prop?prop.PropertyName:"General",duration:parseInt(iDur)||0,notes:iNotes};
+        if(iConvert&&iTaskDesc&&iCat){
+          int.task={Title:iTaskDesc,VAEmail:myEmail,VAName:myVa?.Name||myEmail,PropertyId:iProp||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Priority:iPri,Source:"Ad-Hoc",Notes:`From ${iType} interruption`};
+        }
+        onLogInterruption(int);
+        setIDur("");setINotes("");setIConvert(false);setITaskDesc("");setICat("");setIPri("Normal");
+      }}>{iConvert&&iTaskDesc?"Log Interruption & Add Task":"Log Interruption"}</button>
+    </div>
+
+    {/* Daily Activity Metrics */}
+    <div style={{...ss.card,borderTop:`3px solid ${C.gold}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+        <div><div style={ss.cardT}>📈 Daily Activity Metrics</div><div style={ss.cardS}>Tap + / − to track as you go · Submit at end of day</div></div>
+        <Badge type={mSubmitted?"ok":"wn"} dot={false}>{mSubmitted?"Submitted":"Not submitted"}</Badge>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,marginBottom:10}}>
+        {Object.entries(metrics).map(([key,val])=>
+          <div key={key} style={{background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:8,padding:"9px 5px",textAlign:"center"}}>
+            <div style={{fontSize:8.5,fontWeight:700,color:C.t3,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:3}}>{key}</div>
+            <div style={{fontSize:24,fontWeight:700,fontFamily:mono,color:C.t2,lineHeight:1}}>{val}</div>
+            <div style={{display:"flex",justifyContent:"center",gap:4,marginTop:6}}>
+              <button style={{width:25,height:25,border:`1px solid ${C.b2}`,borderRadius:4,background:C.white,color:C.t2,fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:fnt}} onClick={()=>setMetrics(m=>({...m,[key]:Math.max(0,m[key]-1)}))}>−</button>
+              <button style={{width:25,height:25,border:`1px solid ${C.b2}`,borderRadius:4,background:C.white,color:C.t2,fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:fnt}} onClick={()=>setMetrics(m=>({...m,[key]:m[key]+1}))}>+</button>
+            </div>
+          </div>)}
+      </div>
+      <input style={{...ss.input,marginBottom:9}} value={mNotes} onChange={e=>setMNotes(e.target.value)} placeholder="End-of-day notes (optional)"/>
+      <button style={{...ss.btn(C.gold,C.teal),width:"100%"}} onClick={()=>{
+        onSubmitMetrics({...metrics,notes:mNotes,date:today()});
+        setMSubmitted(true);
+      }}>✓ Submit Day</button>
     </div>
 
     {/* Add Task */}
