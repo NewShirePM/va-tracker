@@ -1068,6 +1068,7 @@ function TaskRow({task,onStart,onDelete,onReview,showVA,isOverdue,reviewCount=0}
 // ══════════════════════════════════════════════════════
 function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAddTask,getVA,isAdmin,isRegional,onResolveReview,onReplyToReview,onAssignReviewProp,acct}){
   const[selProp,setSelProp]=useState("");const[tCat,setTCat]=useState("");const[tDesc,setTDesc]=useState("");const[tPri,setTPri]=useState("Normal");const[tNotes,setTNotes]=useState("");
+  const[expandedThreads,setExpandedThreads]=useState(new Set());
   const cats=data?.config?.categories||[];
   function handleSubmit(){if(!selProp||!tCat||!tDesc)return;const prop=data.properties.find(p=>p.Title===selProp);const va=getVA(selProp);if(!va){alert("No VA assigned.");return;}const cat=cats.find(c=>c.id===tCat);
     onAddTask({Title:tDesc,VAEmail:va.Email,VAName:va.Name,PropertyId:selProp,PropertyName:prop?.PropertyName||"",PMName:myEmp?.Name||myEmail,Category:cat?.name||"Admin/Other",Priority:tPri,Source:"Assigned",AssignedByEmail:myEmail,AssignedByName:myEmp?.Name||myEmail,Notes:tNotes});setTDesc("");setTCat("");setTPri("Normal");setTNotes("");}
@@ -1088,15 +1089,18 @@ function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAd
         <div style={ss.cardS}>VAs flagged these tasks and are waiting on your response</div>
       </div>
       {pendingReviews.map((r,i)=>{
-        // Find all reviews in this thread (same GroupId)
+        // Find all messages in this thread (same GroupId)
         const thread=r.GroupId?data.activities.filter(a=>(a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")&&a.GroupId===r.GroupId).sort((a,b)=>(a.ActivityDate||"").localeCompare(b.ActivityDate||"")):[];
         const needsAssign=!r.PropertyId;
+        const hasThread=thread.length>1;
+        const isExpanded=expandedThreads.has(r.id);
+        const lastResponse=thread.length>1?thread[thread.length-1]:null;
         return<div key={i} style={{padding:"12px 14px",borderBottom:`1px solid ${C.b1}`,background:needsAssign?C.wnb:"transparent"}}>
           <div style={{display:"flex",alignItems:"flex-start",gap:9,marginBottom:8}}>
             <Avatar name={r.VAName} size={30} colorIdx={4}/>
             <div style={{flex:1}}>
               <div style={{fontSize:12,fontWeight:700,color:C.t2}}>{r.VAName} · {r.PropertyName||"⚠ No property assigned"}</div>
-              <div style={{fontSize:10,color:C.b4,marginTop:1}}>{r.Category||"Review"} · {fD(r.ActivityDate)} {fT(r.ActivityDate)}{thread.length>1?` · ${thread.length} in thread`:""}</div>
+              <div style={{fontSize:10,color:C.b4,marginTop:1}}>{r.Category||"Review"} · {fD(r.ActivityDate)} {fT(r.ActivityDate)}{hasThread?<span style={{color:C.pu,fontWeight:600}}> · {thread.length} messages</span>:""}</div>
             </div>
           </div>
           {needsAssign&&<div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8,padding:"6px 8px",background:C.white,border:`1px solid ${C.wn}`,borderRadius:4}}>
@@ -1106,7 +1110,31 @@ function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAd
               {data.properties.map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}
             </select>
           </div>}
-          <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"6px 8px",borderRadius:4,marginBottom:7,lineHeight:1.5}}>"{r.Notes}"</div>
+          {/* Thread display */}
+          {!hasThread?<div style={{fontSize:11,color:C.pu,background:C.pub,padding:"6px 8px",borderRadius:4,marginBottom:7,lineHeight:1.5}}>"{r.Notes}"</div>
+          :<div style={{marginBottom:7}}>
+            {/* Always show the original request */}
+            <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"6px 8px",borderRadius:4,lineHeight:1.5,marginBottom:4}}>
+              <span style={{fontSize:9,fontWeight:700,color:C.pu}}>{r.VAName} · {fD(r.ActivityDate)} {fT(r.ActivityDate)}</span><br/>"{r.Notes}"
+            </div>
+            {/* Expand/collapse for thread */}
+            {!isExpanded&&<div>
+              {lastResponse&&<div style={{fontSize:11,color:lastResponse.ActivityType==="ReviewResponse"?C.ok:C.pu,background:lastResponse.ActivityType==="ReviewResponse"?C.okb:C.pub,padding:"6px 8px",borderRadius:4,lineHeight:1.5,marginBottom:4}}>
+                <span style={{fontSize:9,fontWeight:700}}>{lastResponse.AssignedByName||lastResponse.VAName} · {fD(lastResponse.ActivityDate)} {fT(lastResponse.ActivityDate)}</span><br/>"{lastResponse.Notes}"
+              </div>}
+              <button style={{fontSize:10,fontWeight:600,color:C.pu,background:"none",border:"none",cursor:"pointer",padding:"2px 0",textDecoration:"underline"}} onClick={()=>setExpandedThreads(p=>{const n=new Set(p);n.add(r.id);return n;})}>Show full thread ({thread.length} messages)</button>
+            </div>}
+            {isExpanded&&<div>
+              {thread.slice(1).map((msg,mi)=>{
+                const isResponse=msg.ActivityType==="ReviewResponse";
+                const isVA=msg.VAEmail?.toLowerCase()===r.VAEmail?.toLowerCase()&&!isResponse;
+                return<div key={mi} style={{fontSize:11,color:isResponse?C.ok:C.pu,background:isResponse?C.okb:C.pub,padding:"6px 8px",borderRadius:4,lineHeight:1.5,marginBottom:4,borderLeft:`3px solid ${isResponse?C.ok:C.pu}`}}>
+                  <span style={{fontSize:9,fontWeight:700}}>{msg.AssignedByName||msg.VAName} · {fD(msg.ActivityDate)} {fT(msg.ActivityDate)} · <Badge type={isResponse?"ok":"pu"} dot={false}>{isResponse?"Response":"Request"}</Badge></span><br/>"{msg.Notes}"
+                </div>;
+              })}
+              <button style={{fontSize:10,fontWeight:600,color:C.b4,background:"none",border:"none",cursor:"pointer",padding:"2px 0",textDecoration:"underline"}} onClick={()=>setExpandedThreads(p=>{const n=new Set(p);n.delete(r.id);return n;})}>Collapse thread</button>
+            </div>}
+          </div>}
           <ReviewReplyBox reviewId={r.id} onReply={onReplyToReview} label="PM"/>
         </div>;})}
       {!pendingReviews.length&&<div style={{padding:"20px 14px",textAlign:"center",color:C.b4,fontSize:12}}>No pending review requests from your VAs.</div>}
