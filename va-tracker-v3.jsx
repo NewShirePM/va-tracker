@@ -163,10 +163,13 @@ function App(){
   const[covQ,setCovQ]=useState([]);
   const[queue,setQueue]=useState([]);
   const[tick,setTick]=useState(0);
+  const[lastRefresh,setLastRefresh]=useState(Date.now());
   const[dfFrom,setDfFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-7);return d.toISOString().slice(0,10);});
   const[dfTo,setDfTo]=useState(today());
 
   useEffect(()=>{const id=setInterval(()=>setTick(t=>t+1),1000);return()=>clearInterval(id);},[]);
+  // Auto-refresh every 5 minutes
+  useEffect(()=>{if(!token||!acct||guestToken)return;const id=setInterval(()=>{reload().catch(e=>console.warn("[VT] Auto-refresh failed:",e));},300000);return()=>clearInterval(id);},[token,acct]);
   const fl=useCallback(msg=>{setFlash(msg);setTimeout(()=>setFlash(""),2500);},[]);
   async function gT(){return(await refresh())||token;}
 
@@ -269,7 +272,7 @@ function App(){
     setQueue(q);setCovQ(cv);
   }
 
-  async function reload(){const t=await gT();const d=await loadAll(t);setData(d);buildQueue(d,myEmail,timersRef.current);return d;}
+  async function reload(){const t=await gT();const d=await loadAll(t);setData(d);buildQueue(d,myEmail,timersRef.current);setLastRefresh(Date.now());return d;}
 
   // ── Task CRUD ──
   async function saveTask(task){
@@ -399,6 +402,9 @@ function App(){
     // Backward compat wrapper — routes to replyToReview with Resolved status
     return replyToReview(reviewId,responseNote||"Resolved","Resolved");
   }
+  async function assignReviewProperty(reviewId,propTitle,propName){
+    try{const tk=await gT();await gPatch(tk,iUrl("VA_Activity",reviewId),{PropertyId:propTitle,PropertyName:propName});await reload();fl("Review assigned to "+propName);}catch(e){fl("Error: "+e.message);}
+  }
 
   // ── Coaching notes ──
   async function saveCoachingNote(vaEmail,vaName,note){
@@ -418,12 +424,25 @@ function App(){
     }catch(e){fl("Error: "+e.message);}
   }
 
-  // ── Daily metrics submit ──
-  async function submitDailyMetrics(metrics){
+  // ── Daily metrics — live auto-save ──
+  const metricsSpIdRef=useRef(null);
+  async function saveDailyMetrics(metricsObj,notes){
     try{const tk=await gT();
-      await gPost(tk,lUrl("VA_Activity"),{Title:`Metrics-${myEmp?.Name||myEmail}-${today()}`,ActivityType:"DailyMetrics",VAEmail:myEmail,VAName:myEmp?.Name||myEmail,ActivityDate:new Date().toISOString(),Notes:JSON.stringify(metrics),Status:"Completed"});
-      fl("Daily metrics submitted!");
-    }catch(e){fl("Error: "+e.message);}
+      const combined=notes!==undefined?{...metricsObj,notes}:metricsObj;
+      const notesStr=JSON.stringify(combined);
+      if(metricsSpIdRef.current){
+        await gPatch(tk,iUrl("VA_Activity",metricsSpIdRef.current),{Notes:notesStr,ActivityDate:new Date().toISOString()});
+      }else{
+        const existing=data?.activities.find(a=>a.ActivityType==="DailyMetrics"&&a.VAEmail?.toLowerCase()===myEmail&&a.ActivityDate?.slice(0,10)===today());
+        if(existing){
+          metricsSpIdRef.current=existing.id;
+          await gPatch(tk,iUrl("VA_Activity",existing.id),{Notes:notesStr,ActivityDate:new Date().toISOString()});
+        }else{
+          const res=await gPost(tk,lUrl("VA_Activity"),{Title:`Metrics-${myEmp?.Name||myEmail}-${today()}`,ActivityType:"DailyMetrics",VAEmail:myEmail,VAName:myEmp?.Name||myEmail,ActivityDate:new Date().toISOString(),Notes:notesStr,Status:"Active"});
+          metricsSpIdRef.current=res.id;
+        }
+      }
+    }catch(e){console.warn("[VT] Metrics save error:",e.message);}
   }
 
   // ── Timer actions ──
@@ -627,6 +646,7 @@ function App(){
   const ck=TABS[tab]?.k||TABS[0]?.k;
 
   // ── Header pills ──
+  const refreshAgo=Math.floor((Date.now()-lastRefresh)/60000);
   const pills=[];
   if(!isGuest&&timers.length>0)pills.push({c:C.ok,n:timers.length,l:"timing"});
   if(!isGuest&&covQ.length>0)pills.push({c:C.wn,n:covQ.length,l:"coverage"});
@@ -645,7 +665,7 @@ function App(){
         <div style={{display:"flex",alignItems:"center",gap:6,flex:1,justifyContent:"center",flexWrap:"wrap"}}>
           {pills.map((p,i)=><div key={i} style={ss.pill}><span style={{width:5,height:5,borderRadius:"50%",background:p.c}}/><strong style={{color:"#fff",fontWeight:700}}>{p.n}</strong>&nbsp;{p.l}</div>)}
         </div>
-        <div style={{textAlign:"right",flexShrink:0}}><strong style={{display:"block",fontSize:12,fontWeight:600,color:"#fff"}}>{isGuest?`${guestInfo?.name||"Guest"} · ${guestInfo?.company||""}`:acct?.name||myEmail}</strong><em style={{fontSize:9,fontStyle:"normal",color:isGuest?C.pu:C.gold,textTransform:"uppercase",letterSpacing:"0.07em"}}>{isGuest?"Guest (read-only)":role}</em></div>
+        <div style={{textAlign:"right",flexShrink:0}}><div style={{fontSize:9,color:C.t4,marginBottom:2,cursor:"pointer"}} onClick={()=>{if(!guestToken)reload();}}>{refreshAgo<1?"Just refreshed":`Refreshed ${refreshAgo}m ago`} · ↻</div><strong style={{display:"block",fontSize:12,fontWeight:600,color:"#fff"}}>{isGuest?`${guestInfo?.name||"Guest"} · ${guestInfo?.company||""}`:acct?.name||myEmail}</strong><em style={{fontSize:9,fontStyle:"normal",color:isGuest?C.pu:C.gold,textTransform:"uppercase",letterSpacing:"0.07em"}}>{isGuest?"Guest (read-only)":role}</em></div>
       </div>
       {/* Tabs */}
       <div style={ss.tabs}>
@@ -654,8 +674,8 @@ function App(){
       {flash&&<div style={{background:C.gl0,borderBottom:`1px solid ${C.gold}`,padding:"7px 18px",fontSize:12,fontWeight:600,color:C.g2,textAlign:"center"}}>{flash}</div>}
       {/* Content */}
       <div style={ss.content}>
-        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} onReplyToReview={replyToReview} onRequestTimeOff={requestTimeOff} reviews={data.activities.filter(a=>a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")} isAdmin={isAdmin} fl={fl}/>}
-        {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} onReplyToReview={replyToReview} myEmail={myEmail} acct={acct} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
+        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSaveMetrics={saveDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} onReplyToReview={replyToReview} onRequestTimeOff={requestTimeOff} reviews={data.activities.filter(a=>a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")} isAdmin={isAdmin} fl={fl}/>}
+        {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} onReplyToReview={replyToReview} onAssignReviewProp={assignReviewProperty} myEmail={myEmail} acct={acct} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
         {ck==="coach"&&<CoachingView data={data} onSaveNote={saveCoachingNote}/>}
         {ck==="hist"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
@@ -669,12 +689,29 @@ function App(){
 // ══════════════════════════════════════════════════════
 // MY DAY VIEW
 // ══════════════════════════════════════════════════════
-function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,onLogInterruption,onSubmitMetrics,onSendReview,onResolveReview,onReplyToReview,onRequestTimeOff,reviews,isAdmin,fl}){
+function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,onLogInterruption,onSaveMetrics,onSendReview,onResolveReview,onReplyToReview,onRequestTimeOff,reviews,isAdmin,fl}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   // Interruption state
   const[iType,setIType]=useState("Prospect Call");const[iProp,setIProp]=useState("");const[iDur,setIDur]=useState("");const[iNotes,setINotes]=useState("");const[iConvert,setIConvert]=useState(false);const[iCat,setICat]=useState("");const[iPri,setIPri]=useState("Normal");const[iTaskDesc,setITaskDesc]=useState("");
   // Daily metrics state
-  const[metrics,setMetrics]=useState({Leads:0,Apps:0,Showings:0,"Res. Comms":0,"WOs In":0,"WOs Upd.":0,Renewals:0,"Mgr Calls":0});const[mNotes,setMNotes]=useState("");const[mSubmitted,setMSubmitted]=useState(false);
+  // Daily metrics — restore from SP if exists, auto-save on change
+  const[metrics,setMetrics]=useState(()=>{
+    const existing=data?.activities.find(a=>a.ActivityType==="DailyMetrics"&&a.VAEmail?.toLowerCase()===myEmail&&a.ActivityDate?.slice(0,10)===today());
+    if(existing?.Notes){try{const p=JSON.parse(existing.Notes);return{Leads:p.Leads||0,Apps:p.Apps||0,Showings:p.Showings||0,"Res. Comms":p["Res. Comms"]||0,"WOs In":p["WOs In"]||0,"WOs Upd.":p["WOs Upd."]||0,Renewals:p.Renewals||0,"Mgr Calls":p["Mgr Calls"]||0};}catch(e){}}
+    return{Leads:0,Apps:0,Showings:0,"Res. Comms":0,"WOs In":0,"WOs Upd.":0,Renewals:0,"Mgr Calls":0};
+  });const[mNotes,setMNotes]=useState(()=>{
+    const existing=data?.activities.find(a=>a.ActivityType==="DailyMetrics"&&a.VAEmail?.toLowerCase()===myEmail&&a.ActivityDate?.slice(0,10)===today());
+    if(existing?.Notes){try{return JSON.parse(existing.Notes).notes||"";}catch(e){}}return"";
+  });const[mSaving,setMSaving]=useState(false);
+  const metricsTimerRef=useRef(null);
+  function updateMetric(key,delta){
+    setMetrics(m=>{const updated={...m,[key]:Math.max(0,(m[key]||0)+delta)};
+      // Debounce save — 800ms after last change
+      if(metricsTimerRef.current)clearTimeout(metricsTimerRef.current);
+      metricsTimerRef.current=setTimeout(()=>{setMSaving(true);onSaveMetrics(updated,mNotes).then(()=>setMSaving(false));},800);
+      return updated;
+    });
+  }
   const cats=config?.categories||[];
   const portProps=data?data.portfolios.filter(p=>p.VAEmail?.toLowerCase()===myEmail).map(p=>data.properties.find(pr=>pr.Title===p.PropertyId)).filter(Boolean):[];
   const myTasks=isAdmin?queue:queue.filter(t=>t.VAEmail?.toLowerCase()===myEmail);
@@ -907,11 +944,11 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
       }}>{iConvert&&iTaskDesc?"Log Interruption & Add Task":"Log Interruption"}</button>
     </div>
 
-    {/* Daily Activity Metrics */}
+    {/* Daily Activity Metrics — LIVE */}
     <div style={{...ss.card,borderTop:`3px solid ${C.gold}`}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-        <div><div style={ss.cardT}>📈 Daily Activity Metrics</div><div style={ss.cardS}>Tap + / − to track as you go · Submit at end of day</div></div>
-        <Badge type={mSubmitted?"ok":"wn"} dot={false}>{mSubmitted?"Submitted":"Not submitted"}</Badge>
+        <div><div style={ss.cardT}>📈 Daily Activity Metrics</div><div style={ss.cardS}>Tap + / − to track · Saves automatically</div></div>
+        {mSaving?<Badge type="wn" dot={false}>Saving...</Badge>:<Badge type="ok" dot={false}>Live</Badge>}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,marginBottom:10}}>
         {Object.entries(metrics).map(([key,val])=>
@@ -919,16 +956,12 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
             <div style={{fontSize:8.5,fontWeight:700,color:C.t3,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:3}}>{key}</div>
             <div style={{fontSize:24,fontWeight:700,fontFamily:mono,color:C.t2,lineHeight:1}}>{val}</div>
             <div style={{display:"flex",justifyContent:"center",gap:4,marginTop:6}}>
-              <button style={{width:25,height:25,border:`1px solid ${C.b2}`,borderRadius:4,background:C.white,color:C.t2,fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:fnt}} onClick={()=>setMetrics(m=>({...m,[key]:Math.max(0,m[key]-1)}))}>−</button>
-              <button style={{width:25,height:25,border:`1px solid ${C.b2}`,borderRadius:4,background:C.white,color:C.t2,fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:fnt}} onClick={()=>setMetrics(m=>({...m,[key]:m[key]+1}))}>+</button>
+              <button style={{width:25,height:25,border:`1px solid ${C.b2}`,borderRadius:4,background:C.white,color:C.t2,fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:fnt}} onClick={()=>updateMetric(key,-1)}>−</button>
+              <button style={{width:25,height:25,border:`1px solid ${C.b2}`,borderRadius:4,background:C.white,color:C.t2,fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:fnt}} onClick={()=>updateMetric(key,1)}>+</button>
             </div>
           </div>)}
       </div>
-      <input style={{...ss.input,marginBottom:9}} value={mNotes} onChange={e=>setMNotes(e.target.value)} placeholder="End-of-day notes (optional)"/>
-      <button style={{...ss.btn(C.gold,C.teal),width:"100%"}} onClick={()=>{
-        onSubmitMetrics({...metrics,notes:mNotes,date:today()});
-        setMSubmitted(true);
-      }}>✓ Submit Day</button>
+      <input style={{...ss.input,marginBottom:0}} value={mNotes} onChange={e=>{setMNotes(e.target.value);if(metricsTimerRef.current)clearTimeout(metricsTimerRef.current);metricsTimerRef.current=setTimeout(()=>{setMSaving(true);onSaveMetrics(metrics,e.target.value).then(()=>setMSaving(false));},1200);}} placeholder="Notes (optional — saves automatically)"/>
     </div>
 
     {/* Request Time Off */}
@@ -1033,7 +1066,7 @@ function TaskRow({task,onStart,onDelete,onReview,showVA,isOverdue,reviewCount=0}
 // ══════════════════════════════════════════════════════
 // MANAGER VIEW
 // ══════════════════════════════════════════════════════
-function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAddTask,getVA,isAdmin,isRegional,onResolveReview,onReplyToReview,acct}){
+function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAddTask,getVA,isAdmin,isRegional,onResolveReview,onReplyToReview,onAssignReviewProp,acct}){
   const[selProp,setSelProp]=useState("");const[tCat,setTCat]=useState("");const[tDesc,setTDesc]=useState("");const[tPri,setTPri]=useState("Normal");const[tNotes,setTNotes]=useState("");
   const cats=data?.config?.categories||[];
   function handleSubmit(){if(!selProp||!tCat||!tDesc)return;const prop=data.properties.find(p=>p.Title===selProp);const va=getVA(selProp);if(!va){alert("No VA assigned.");return;}const cat=cats.find(c=>c.id===tCat);
@@ -1044,8 +1077,8 @@ function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAd
   const activeOnMine=timers.filter(t=>propIds.has(t.PropertyId));
   const overdueOnMine=overdue.filter(t=>propIds.has(t.PropertyId));
 
-  // Pending reviews for my properties
-  const pendingReviews=data.activities.filter(a=>a.ActivityType==="Review"&&(a.Status==="Pending"||a.Status==="Responded")&&propIds.has(a.PropertyId));
+  // Pending reviews — admin/regional see ALL, managers see their properties + unassigned
+  const pendingReviews=data.activities.filter(a=>a.ActivityType==="Review"&&(a.Status==="Pending"||a.Status==="Responded")&&(isAdmin||isRegional||propIds.has(a.PropertyId)||!a.PropertyId));
 
   return(<div>
     {/* Review Inbox */}
@@ -1057,14 +1090,22 @@ function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAd
       {pendingReviews.map((r,i)=>{
         // Find all reviews in this thread (same GroupId)
         const thread=r.GroupId?data.activities.filter(a=>(a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")&&a.GroupId===r.GroupId).sort((a,b)=>(a.ActivityDate||"").localeCompare(b.ActivityDate||"")):[];
-        return<div key={i} style={{padding:"12px 14px",borderBottom:`1px solid ${C.b1}`}}>
+        const needsAssign=!r.PropertyId;
+        return<div key={i} style={{padding:"12px 14px",borderBottom:`1px solid ${C.b1}`,background:needsAssign?C.wnb:"transparent"}}>
           <div style={{display:"flex",alignItems:"flex-start",gap:9,marginBottom:8}}>
             <Avatar name={r.VAName} size={30} colorIdx={4}/>
             <div style={{flex:1}}>
-              <div style={{fontSize:12,fontWeight:700,color:C.t2}}>{r.VAName} · {r.PropertyName}</div>
+              <div style={{fontSize:12,fontWeight:700,color:C.t2}}>{r.VAName} · {r.PropertyName||"⚠ No property assigned"}</div>
               <div style={{fontSize:10,color:C.b4,marginTop:1}}>{r.Category||"Review"} · {fD(r.ActivityDate)} {fT(r.ActivityDate)}{thread.length>1?` · ${thread.length} in thread`:""}</div>
             </div>
           </div>
+          {needsAssign&&<div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8,padding:"6px 8px",background:C.white,border:`1px solid ${C.wn}`,borderRadius:4}}>
+            <span style={{fontSize:10,fontWeight:700,color:C.wn,whiteSpace:"nowrap"}}>Assign to:</span>
+            <select style={{...ss.select,flex:1,padding:"4px 8px",fontSize:11}} onChange={e=>{if(!e.target.value)return;const p=data.properties.find(pr=>pr.Title===e.target.value);if(p)onAssignReviewProp(r.id,p.Title,p.PropertyName);}} defaultValue="">
+              <option value="">Select property...</option>
+              {data.properties.map(p=><option key={p.Title} value={p.Title}>{p.PropertyName}</option>)}
+            </select>
+          </div>}
           <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"6px 8px",borderRadius:4,marginBottom:7,lineHeight:1.5}}>"{r.Notes}"</div>
           <ReviewReplyBox reviewId={r.id} onReply={onReplyToReview} label="PM"/>
         </div>;})}
@@ -1142,13 +1183,23 @@ function ManagerView({data,myEmail,myEmp,mgrProps,queue,timers,covQ,overdue,onAd
 // ══════════════════════════════════════════════════════
 // DASHBOARD VIEW
 // ══════════════════════════════════════════════════════
+// Helper: calculate live shift minutes including active (clocked-in) shifts
+function liveShiftMin(shifts,vaEmail){
+  let total=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0);
+  // Add elapsed time for active shifts (no EndTime)
+  shifts.filter(a=>a.StartTime&&!a.EndTime&&(!vaEmail||a.VAEmail?.toLowerCase()===vaEmail)).forEach(a=>{
+    total+=Math.max(0,Math.round((Date.now()-new Date(a.StartTime).getTime())/6e4));
+  });
+  return total;
+}
+
 function DashboardView({data,queue,timers,covQ,overdue,dfFrom,dfTo,setDfFrom,setDfTo,isAdmin,role,mgrProps}){
   if(!data)return null;
   const propIds=role==="manager"?new Set(mgrProps.map(p=>p.Title)):null;
   const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!propIds||propIds.has(a.PropertyId)));
   const done=tasks.filter(a=>a.Status==="Completed");const blocked=tasks.filter(a=>a.Status==="Blocked");const inc=tasks.filter(a=>a.Status==="Incomplete");
   const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(a.ActivityDate,dfFrom,dfTo));
-  const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0);const taskMin=done.reduce((s,a)=>s+(a.DurationMin||0),0);
+  const shiftMin=liveShiftMin(shifts);const taskMin=done.reduce((s,a)=>s+(a.DurationMin||0),0);
   const rate=tasks.length?Math.round(done.length/tasks.length*100):0;const util=shiftMin>0?Math.round(taskMin/shiftMin*100):0;
   const filteredVAs=propIds?data.vas.filter(v=>data.portfolios.some(p=>propIds.has(p.PropertyId)&&p.VAEmail?.toLowerCase()===v.Email.toLowerCase())):data.vas;
 
@@ -1190,6 +1241,43 @@ function DashboardView({data,queue,timers,covQ,overdue,dfFrom,dfTo,setDfFrom,set
           </div>;})}
       </div>
     </div>
+    {/* Daily Activity Metrics Rollup */}
+    {(isAdmin||role==="regional")&&(()=>{
+      const td=today();
+      const metricRecords=data.activities.filter(a=>a.ActivityType==="DailyMetrics"&&a.ActivityDate?.slice(0,10)===td&&a.Status!=="Deleted");
+      const metricKeys=["Leads","Apps","Showings","Res. Comms","WOs In","WOs Upd.","Renewals","Mgr Calls"];
+      const byVA=filteredVAs.map(va=>{
+        const rec=metricRecords.find(m=>m.VAEmail?.toLowerCase()===va.Email.toLowerCase());
+        let parsed=null;
+        if(rec?.Notes){try{parsed=JSON.parse(rec.Notes);}catch(e){}}
+        return{va,submitted:!!rec,metrics:parsed};
+      });
+      const totals={};metricKeys.forEach(k=>{totals[k]=byVA.reduce((s,v)=>s+((v.metrics?.[k])||0),0);});
+      const submittedCount=byVA.filter(v=>v.submitted).length;
+      return<div style={{...ss.card,marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+          <div><div style={ss.cardT}>📊 Daily Activity Metrics — Today</div><div style={ss.cardS}>{submittedCount}/{filteredVAs.length} VAs tracking · Updates on page refresh</div></div>
+          {submittedCount<filteredVAs.length&&<Badge type="wn" dot={false}>{filteredVAs.length-submittedCount} not started</Badge>}
+        </div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr><th style={ss.th}>VA</th>{metricKeys.map(k=><th key={k} style={{...ss.th,textAlign:"center",fontSize:10}}>{k}</th>)}<th style={{...ss.th,textAlign:"center"}}>Status</th></tr></thead>
+            <tbody>
+              {byVA.map(({va,submitted,metrics:m})=><tr key={va.Email} style={{opacity:submitted?1:0.5}}>
+                <td style={{...ss.td,fontWeight:600,fontSize:12}}>{va.Name}</td>
+                {metricKeys.map(k=><td key={k} style={{...ss.td,textAlign:"center",fontFamily:mono,fontSize:12,fontWeight:600,color:(m?.[k]||0)>0?C.t2:C.b3}}>{m?.[k]||0}</td>)}
+                <td style={{...ss.td,textAlign:"center"}}>{submitted?<Badge type="ok" dot={false}>Live</Badge>:<Badge type="wn" dot={false}>—</Badge>}</td>
+              </tr>)}
+              <tr style={{background:C.tl00}}>
+                <td style={{...ss.td,fontWeight:700,fontSize:12,color:C.t2}}>TOTAL</td>
+                {metricKeys.map(k=><td key={k} style={{...ss.td,textAlign:"center",fontFamily:mono,fontSize:13,fontWeight:700,color:totals[k]>0?C.teal:C.b3}}>{totals[k]}</td>)}
+                <td style={{...ss.td,textAlign:"center"}}><span style={{fontSize:10,color:C.b4}}>{submittedCount}/{filteredVAs.length}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>;
+    })()}
     {/* Needs Attention */}
     {(blocked.length>0||overdue.length>0)&&<div style={{...ss.card,borderTop:`3px solid ${C.er}`,background:C.erb}}>
       <div style={{fontSize:13,fontWeight:700,color:C.er,marginBottom:8}}>🚨 Needs Attention</div>
@@ -1219,7 +1307,7 @@ function DashboardView({data,queue,timers,covQ,overdue,dfFrom,dfTo,setDfFrom,set
       <div style={{overflowX:"auto",borderRadius:8,border:`1px solid ${C.b1}`}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["VA","Done","Rate","Utilization","Overdue","Blocked","Incomplete"].map(h=><th key={h} style={ss.th}>{h}</th>)}</tr></thead><tbody>
           {filteredVAs.map((va,vi)=>{const vT=tasks.filter(a=>a.VAEmail===va.Email);const vD=vT.filter(a=>a.Status==="Completed");const vB=vT.filter(a=>a.Status==="Blocked");const vI=vT.filter(a=>a.Status==="Incomplete");
-            const vS=shifts.filter(a=>a.VAEmail===va.Email);const vSm=vS.reduce((s,a)=>s+(a.WorkMinutes||0),0);const vTm=vD.reduce((s,a)=>s+(a.DurationMin||0),0);
+            const vS=shifts.filter(a=>a.VAEmail===va.Email);const vSm=liveShiftMin(vS,va.Email.toLowerCase());const vTm=vD.reduce((s,a)=>s+(a.DurationMin||0),0);
             const vR=vT.length?Math.round(vD.length/vT.length*100):0;const vU=vSm>0?Math.round(vTm/vSm*100):0;const vOD=overdue.filter(t=>t.VAEmail===va.Email);
             return<tr key={va.Email} style={{opacity:va.VATrackerStatus==="Out"?0.5:1}}>
               <td style={ss.td}><div style={{display:"flex",alignItems:"center",gap:7}}><Avatar name={va.Name} size={24} colorIdx={vi} isOut={va.VATrackerStatus==="Out"}/><strong style={{color:va.VATrackerStatus==="Out"?C.er:C.t2}}>{va.Name}</strong></div></td>
@@ -1246,7 +1334,7 @@ function CoachingView({data,onSaveNote}){
   const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&a.VAEmail?.toLowerCase()===vaEmail&&dAgo(a.ActivityDate)<=period);
   const done=tasks.filter(t=>t.Status==="Completed");const blocked=tasks.filter(t=>t.Status==="Blocked");const inc=tasks.filter(t=>t.Status==="Incomplete");
   const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===vaEmail&&dAgo(a.ActivityDate)<=period);
-  const shiftMin=shifts.reduce((s,a)=>s+(a.WorkMinutes||0),0);const taskMin=done.reduce((s,a)=>s+(a.DurationMin||0),0);
+  const shiftMin=liveShiftMin(shifts,vaEmail);const taskMin=done.reduce((s,a)=>s+(a.DurationMin||0),0);
   const rate=tasks.length?Math.round(done.length/tasks.length*100):0;const util=shiftMin>0?Math.round(taskMin/shiftMin*100):0;
   // Category breakdown
   const catMap={};done.forEach(t=>{if(!catMap[t.Category])catMap[t.Category]={c:0,m:0};catMap[t.Category].c++;catMap[t.Category].m+=(t.DurationMin||0);});
@@ -1491,8 +1579,9 @@ function ShiftManager({data,onEditShift,onDeleteShift,onClockInVA}){
               <div style={{minWidth:80}}><label style={ss.label}>Break (min)</label><input style={ss.input} type="number" value={eBrk} onChange={e=>setEBrk(e.target.value)}/></div>
             </div>
             {eIn&&eOut&&<div style={{fontSize:11,color:C.b4,marginBottom:8}}>Calculated work time: {fM(Math.max(0,Math.round((new Date(eOut)-new Date(eIn))/6e4)-parseInt(eBrk||0)))}</div>}
+            {eIn&&!eOut&&<div style={{fontSize:11,color:C.wn,marginBottom:8}}>Active shift — leave Clock Out empty to keep it open</div>}
             <div style={{display:"flex",gap:6}}>
-              <button style={{...ss.btn(C.ok),...ss.xs}} onClick={()=>{const fields={StartTime:new Date(eIn).toISOString(),EndTime:new Date(eOut).toISOString(),BreakMinutes:parseInt(eBrk)||0,ActivityDate:new Date(eIn).toISOString()};onEditShift(s.id,fields);setEditId(null);}}>✓ Save</button>
+              <button style={{...ss.btn(C.ok),...ss.xs}} onClick={()=>{if(!eIn){alert("Clock In time is required");return;}const fields={StartTime:new Date(eIn).toISOString(),BreakMinutes:parseInt(eBrk)||0,ActivityDate:new Date(eIn).toISOString()};if(eOut){fields.EndTime=new Date(eOut).toISOString();fields.WorkMinutes=Math.max(0,Math.round((new Date(eOut)-new Date(eIn))/6e4)-(parseInt(eBrk)||0));fields.Status="Completed";}onEditShift(s.id,fields);setEditId(null);}}>✓ Save</button>
               <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>setEditId(null)}>Cancel</button>
             </div>
           </div>}
