@@ -53,13 +53,14 @@ async function sendEmail(token,to,subject,body){
 async function safeGet(token,name,url){try{const r=await gAll(token,url);return r;}catch(e){console.warn(`[VT] ${name} failed:`,e.message);return[];}}
 
 async function loadAll(token){
-  const[eR,cR,pR,ptR,aR,gR]=await Promise.all([
+  const[eR,cR,pR,ptR,aR,gR,toR]=await Promise.all([
     safeGet(token,"Employees",`${lUrl("Employees")}?expand=fields&$top=200`),
     safeGet(token,"Config",`${lUrl("VA_TrackerConfig")}?expand=fields&$top=10`),
     safeGet(token,"Properties",`${lUrl("VA_Properties")}?expand=fields&$top=200`),
     safeGet(token,"Portfolios",`${lUrl("VA_Portfolios")}?expand=fields&$top=200`),
     safeGet(token,"Activity",`${lUrl("VA_Activity")}?expand=fields&$top=1000`),
     safeGet(token,"Guests",`${lUrl("VA_Guests")}?expand=fields&$top=200`),
+    safeGet(token,"TimeOff",`${lUrl("VA_TimeOff")}?expand=fields&$top=500`),
   ]);
   const employees=eR.map(e=>({id:e.id,...e.fields}));
   const config=cR.length>0?JSON.parse(cR[0].fields.ConfigJSON||"{}"):{};
@@ -71,8 +72,9 @@ async function loadAll(token){
   const activities=(cutoff?allActs.filter(a=>{const d=a.ActivityDate||a.StartTime||"";return d>=cutoff;}):allActs).filter(a=>a.Status!=="Deleted");
   const vas=employees.filter(e=>e.JobTitle==="Virtual Assistant"&&e.EmployeeActive!==false);
   const guests=gR.map(g=>({id:g.id,...g.fields})).filter(g=>g.IsActive!==false);
+  const timeOff=toR.map(t=>({id:t.id,...t.fields}));
   const pms=employees.filter(e=>(e.JobTitle==="Property Manager"||e.JobTitle==="Regional/Portfolio Manager"||e.JobTitle==="Owner/Operator")&&e.EmployeeActive!==false);
-  return{employees,config,properties,portfolios,activities,vas,pms,guests};
+  return{employees,config,properties,portfolios,activities,vas,pms,guests,timeOff};
 }
 
 // ── MSAL ──
@@ -226,6 +228,13 @@ function App(){
       const td=today();
       const dow=new Date().getDay();
       if(dow===0||dow===6){setQueue(q);setCovQ(cv);return;} // Skip weekends
+    // Auto-out for scheduled time off
+    if(d.timeOff){
+      d.timeOff.filter(to=>to.Status==="Approved"&&to.StartDate?.slice(0,10)<=td&&(to.EndDate?.slice(0,10)>=td||!to.EndDate)).forEach(to=>{
+        const va=d.vas.find(v=>v.Email?.toLowerCase()===to.VAEmail?.toLowerCase());
+        if(va&&va.VATrackerStatus!=="Out"){console.log("[VT] Auto-out:",va.Name,"- scheduled time off");}
+      });
+    }
       const todayTasks=d.activities.filter(a=>a.ActivityType==="Task"&&a.ActivityDate&&a.ActivityDate.slice(0,10)===td);
       const existing=new Set(todayTasks.map(t=>`${t.VAEmail}|${t.Title}`));
       persistedQueued.forEach(a=>{existing.add(`${a.VAEmail}|${a.Title}`);});
@@ -287,6 +296,41 @@ function App(){
   async function deactivateGuest(id,name){
     if(!window.confirm(`Deactivate guest access for ${name}?`))return;
     try{const tk=await gT();await gPatch(tk,iUrl("VA_Guests",id),{IsActive:false});await reload();fl(`${name} deactivated`);}catch(e){fl("Error: "+e.message);}
+  }
+
+  // ── Time Off management ──
+  async function requestTimeOff(req){
+    try{const tk=await gT();
+      await gPost(tk,lUrl("VA_TimeOff"),{Title:`TO-${Date.now().toString(36)}`,VAEmail:req.vaEmail,VAName:req.vaName,RequestType:req.type,StartDate:req.startDate,EndDate:req.endDate,HoursRequested:req.hours||0,Status:"Pending",PaidStatus:"TBD",VANotes:req.notes||"",RequestedDate:new Date().toISOString()});
+      fl("Time off request submitted!");await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+  async function updateTimeOff(id,fields){
+    try{const tk=await gT();await gPatch(tk,iUrl("VA_TimeOff",id),fields);await reload();fl("Time off updated!");}catch(e){fl("Error: "+e.message);}
+  }
+  async function approveTimeOff(id,paidStatus,adminNotes,supervisorConfirmed){
+    try{const tk=await gT();
+      await gPatch(tk,iUrl("VA_TimeOff",id),{Status:"Approved",PaidStatus:paidStatus||"TBD",AdminNotes:adminNotes||"",SupervisorConfirmed:supervisorConfirmed||false,ApprovedBy:myEmp?.Name||acct?.name||myEmail,ApprovedDate:new Date().toISOString()});
+      fl("Time off approved!");await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+  async function denyTimeOff(id,adminNotes){
+    try{const tk=await gT();
+      await gPatch(tk,iUrl("VA_TimeOff",id),{Status:"Denied",AdminNotes:adminNotes||"",ApprovedBy:myEmp?.Name||acct?.name||myEmail,ApprovedDate:new Date().toISOString()});
+      fl("Time off denied.");await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+  async function logCallout(vaEmail,vaName,notes){
+    try{const tk=await gT();
+      await gPost(tk,lUrl("VA_TimeOff"),{Title:`CO-${Date.now().toString(36)}`,VAEmail:vaEmail,VAName:vaName,RequestType:"Callout",StartDate:new Date().toISOString(),EndDate:new Date().toISOString(),Status:"Approved",PaidStatus:"Unpaid",AdminNotes:notes||"Same-day callout",ApprovedBy:myEmp?.Name||myEmail,ApprovedDate:new Date().toISOString(),RequestedDate:new Date().toISOString()});
+      fl(`${vaName} callout logged`);await reload();
+    }catch(e){fl("Error: "+e.message);}
+  }
+  async function logEarlyDeparture(vaEmail,vaName,departureTime,notes){
+    try{const tk=await gT();
+      await gPost(tk,lUrl("VA_TimeOff"),{Title:`ED-${Date.now().toString(36)}`,VAEmail:vaEmail,VAName:vaName,RequestType:"Early Departure",StartDate:new Date().toISOString(),DepartureTime:departureTime,Status:"Approved",PaidStatus:"Partial",AdminNotes:notes||"",ApprovedBy:myEmp?.Name||myEmail,ApprovedDate:new Date().toISOString(),RequestedDate:new Date().toISOString()});
+      fl(`${vaName} early departure logged`);await reload();
+    }catch(e){fl("Error: "+e.message);}
   }
 
   // ── Shift management ──
@@ -589,12 +633,12 @@ function App(){
       {flash&&<div style={{background:C.gl0,borderBottom:`1px solid ${C.gold}`,padding:"7px 18px",fontSize:12,fontWeight:600,color:C.g2,textAlign:"center"}}>{flash}</div>}
       {/* Content */}
       <div style={ss.content}>
-        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} onReplyToReview={replyToReview} reviews={data.activities.filter(a=>a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")} isAdmin={isAdmin} fl={fl}/>}
+        {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} onReplyToReview={replyToReview} onRequestTimeOff={requestTimeOff} reviews={data.activities.filter(a=>a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")} isAdmin={isAdmin} fl={fl}/>}
         {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} onReplyToReview={replyToReview} myEmail={myEmail} acct={acct} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
         {ck==="coach"&&<CoachingView data={data} onSaveNote={saveCoachingNote}/>}
         {ck==="hist"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onEditShift={editShift} onDeleteShift={deleteShift} onAddGuest={addGuest} onDeactivateGuest={deactivateGuest} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onApproveTimeOff={approveTimeOff} onDenyTimeOff={denyTimeOff} onLogCallout={logCallout} onLogEarlyDeparture={logEarlyDeparture} onEditShift={editShift} onDeleteShift={deleteShift} onAddGuest={addGuest} onDeactivateGuest={deactivateGuest} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
       </div>
     </div>
   );
@@ -604,7 +648,7 @@ function App(){
 // ══════════════════════════════════════════════════════
 // MY DAY VIEW
 // ══════════════════════════════════════════════════════
-function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,onLogInterruption,onSubmitMetrics,onSendReview,onResolveReview,onReplyToReview,reviews,isAdmin,fl}){
+function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,overdue,config,onClockIn,onBreakStart,onBreakEnd,onClockOut,onStartTimer,onPause,onResume,onFinish,onCancel,onClaimCov,onAddTask,onDeleteTask,onLogInterruption,onSubmitMetrics,onSendReview,onResolveReview,onReplyToReview,onRequestTimeOff,reviews,isAdmin,fl}){
   const[showForm,setShowForm]=useState(false);const[fCat,setFCat]=useState("");const[fProp,setFProp]=useState("");const[fPri,setFPri]=useState("Normal");const[fDesc,setFDesc]=useState("");
   // Interruption state
   const[iType,setIType]=useState("Prospect Call");const[iProp,setIProp]=useState("");const[iDur,setIDur]=useState("");const[iNotes,setINotes]=useState("");const[iConvert,setIConvert]=useState(false);const[iCat,setICat]=useState("");const[iPri,setIPri]=useState("Normal");const[iTaskDesc,setITaskDesc]=useState("");
@@ -866,6 +910,23 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
       }}>✓ Submit Day</button>
     </div>
 
+    {/* Request Time Off */}
+    {!isAdmin&&<TimeOffRequestCard myEmail={myEmail} myVa={myVa} onRequest={onRequestTimeOff}/>}
+
+    {/* Upcoming Team Time Off — visible to ALL */}
+    {(()=>{
+      const upcoming=(data.timeOff||[]).filter(t=>t.Status==="Approved"&&t.StartDate?.slice(0,10)>=today()).sort((a,b)=>(a.StartDate||"").localeCompare(b.StartDate||""));
+      return<div style={ss.card}>
+        <div style={ss.cardT}>📅 Upcoming Team Time Off</div>
+        {!upcoming.length?<div style={{textAlign:"center",padding:"12px 0",color:C.b4,fontSize:12}}>No upcoming time off scheduled.</div>
+        :upcoming.slice(0,8).map((to,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:`1px solid ${C.b1}`}}>
+          <Avatar name={to.VAName} size={22}/>
+          <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:C.t2}}>{to.VAName}</div><div style={{fontSize:10,color:C.b4}}>{fD(to.StartDate)}{to.EndDate&&to.EndDate!==to.StartDate?` – ${fD(to.EndDate)}`:""} · {to.RequestType}</div></div>
+          <Badge type={to.RequestType==="PTO"?"in":"wn"} dot={false}>{to.RequestType}</Badge>
+        </div>)}
+      </div>;
+    })()}
+
     {/* Add Task */}
     <div style={ss.card}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={ss.cardT}>➕ Add Task</div><button style={ss.btnO(C.t2,C.b2)} onClick={()=>setShowForm(!showForm)}>{showForm?"Cancel":"New"}</button></div>
@@ -881,6 +942,28 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
     </div>{/* end right column */}
     </div>{/* end grid */}
   </div>);
+}
+
+// ── Time Off Request Card (VA view) ──
+function TimeOffRequestCard({myEmail,myVa,onRequest}){
+  const[open,setOpen]=useState(false);const[type,setType]=useState("PTO");const[start,setStart]=useState("");const[end,setEnd]=useState("");const[hours,setHours]=useState("");const[notes,setNotes]=useState("");
+  return<div style={ss.card}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div style={ss.cardT}>📅 Request Time Off</div>
+      <button style={ss.btnO(C.t2,C.b2)} onClick={()=>setOpen(!open)}>{open?"Cancel":"Request"}</button>
+    </div>
+    {open&&<div style={{marginTop:12}}>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div style={{flex:1,minWidth:100}}><label style={ss.label}>Type *</label><select style={ss.select} value={type} onChange={e=>setType(e.target.value)}><option>PTO</option><option>Personal</option><option>Sick</option></select></div>
+        <div style={{flex:1,minWidth:120}}><label style={ss.label}>Start Date *</label><input style={ss.input} type="date" value={start} onChange={e=>setStart(e.target.value)}/></div>
+        <div style={{flex:1,minWidth:120}}><label style={ss.label}>End Date</label><input style={ss.input} type="date" value={end} onChange={e=>setEnd(e.target.value)}/></div>
+        <div style={{minWidth:70}}><label style={ss.label}>Hours</label><input style={ss.input} type="number" value={hours} onChange={e=>setHours(e.target.value)} placeholder="8"/></div>
+      </div>
+      <label style={ss.label}>Notes</label>
+      <textarea style={{...ss.input,minHeight:40,marginBottom:10}} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Reason or details (optional)"/>
+      <button style={{...ss.btn(C.teal),width:"100%"}} onClick={()=>{if(!start)return;onRequest({vaEmail:myEmail,vaName:myVa?.Name||myEmail,type,startDate:start,endDate:end||start,hours:parseInt(hours)||0,notes});setOpen(false);setStart("");setEnd("");setHours("");setNotes("");}}>Submit Request</button>
+    </div>}
+  </div>;
 }
 
 // ── Review Reply Box (inline reply + resolve for both VA and PM) ──
@@ -1059,6 +1142,33 @@ function DashboardView({data,queue,timers,covQ,overdue,dfFrom,dfTo,setDfFrom,set
     <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
       <KPI label="Tasks" value={tasks.length}/><KPI label="Done" value={done.length} color={C.ok} sub={`${rate}% rate`}/><KPI label="Utilization" value={`${util}%`} color={util>=65?C.ok:util>=50?C.wn:shiftMin>0?C.er:C.t2}/><KPI label="Overdue" value={overdue.length} color={overdue.length?C.er:C.ok}/><KPI label="Blocked" value={blocked.length} color={blocked.length?C.er:C.ok}/><KPI label="Coverage" value={covQ.length} color={covQ.length?C.wn:C.ok}/>
     </div>
+    {/* Team Status — who's clocked in */}
+    <div style={{...ss.card,marginBottom:12}}>
+      <div style={{...ss.cardT,marginBottom:10}}>👥 Team Status — Today</div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        {filteredVAs.map((va,vi)=>{
+          const isOut=va.VATrackerStatus==="Out";
+          const todayShifts=data.activities.filter(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===va.Email.toLowerCase()&&a.ActivityDate?.slice(0,10)===today()&&a.Status!=="Deleted");
+          const activeShift=todayShifts.find(s=>s.StartTime&&!s.EndTime);
+          const completedShift=todayShifts.find(s=>s.StartTime&&s.EndTime);
+          const activeTimer=timers.find(t=>t.VAEmail?.toLowerCase()===va.Email.toLowerCase());
+          let status,statusColor,statusBg,detail;
+          if(isOut){status="OUT";statusColor=C.er;statusBg=C.erb;detail="Marked out";}
+          else if(activeShift){status=activeTimer?"Working":"Clocked In";statusColor=C.ok;statusBg=C.okb;detail=`Since ${fT(activeShift.StartTime)}${activeTimer?` · ${activeTimer.Title}`:""}`;}
+          else if(completedShift){status="Clocked Out";statusColor=C.b4;statusBg=C.b1;detail=`${fT(completedShift.StartTime)} – ${fT(completedShift.EndTime)} · ${fM(completedShift.WorkMinutes)}`;}
+          else{status="Not Clocked In";statusColor=C.wn;statusBg=C.wnb;detail="No shift started today";}
+          return<div key={va.Email} style={{flex:"1 1 160px",minWidth:150,background:statusBg,border:`1px solid ${statusColor}22`,borderRadius:8,padding:"10px 12px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+              <Avatar name={va.Name} size={28} colorIdx={vi} isOut={isOut}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12,fontWeight:700,color:isOut?C.er:C.t2}}>{va.Name}</div>
+                <div style={{fontSize:10,color:C.b4,marginTop:1}}>{detail}</div>
+              </div>
+            </div>
+            <Badge type={status==="Working"||status==="Clocked In"?"ok":status==="OUT"?"er":status==="Not Clocked In"?"wn":"ne"} dot={status==="Working"||status==="Clocked In"}>{status}</Badge>
+          </div>;})}
+      </div>
+    </div>
     {/* Needs Attention */}
     {(blocked.length>0||overdue.length>0)&&<div style={{...ss.card,borderTop:`3px solid ${C.er}`,background:C.erb}}>
       <div style={{fontSize:13,fontWeight:700,color:C.er,marginBottom:8}}>🚨 Needs Attention</div>
@@ -1201,6 +1311,118 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps}){
 }
 
 // ══════════════════════════════════════════════════════
+// TIME OFF ADMIN COMPONENT
+// ══════════════════════════════════════════════════════
+function TimeOffAdmin({data,myEmail,acct,myEmp,onApprove,onDeny,onLogCallout,onLogEarlyDeparture}){
+  const[appId,setAppId]=useState(null);const[paid,setPaid]=useState("TBD");const[aNotes,setANotes]=useState("");const[supConf,setSupConf]=useState(false);
+  const[coVa,setCoVa]=useState("");const[coNotes,setCoNotes]=useState("");
+  const[edVa,setEdVa]=useState("");const[edTime,setEdTime]=useState("");const[edNotes,setEdNotes]=useState("");
+  const[view,setView]=useState("pending");
+  const timeOff=data.timeOff||[];
+  const pending=timeOff.filter(t=>t.Status==="Pending");
+  const approved=timeOff.filter(t=>t.Status==="Approved").sort((a,b)=>(a.StartDate||"").localeCompare(b.StartDate||""));
+  const upcoming=approved.filter(t=>t.StartDate?.slice(0,10)>=today());
+  const past=timeOff.filter(t=>t.Status!=="Pending").sort((a,b)=>(b.StartDate||"").localeCompare(a.StartDate||""));
+  const typeColors={PTO:C.inf,Personal:C.pu,Sick:C.wn,Callout:C.er,"Early Departure":C.er};
+
+  return<div>
+    {/* Pending Requests */}
+    <div style={{...ss.card,borderTop:`3px solid ${C.wn}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+        <div><div style={ss.cardT}>📋 Time Off Requests{pending.length>0?` — ${pending.length} pending`:""}</div><div style={ss.cardS}>Approve, deny, and track paid/unpaid status</div></div>
+      </div>
+      {!pending.length&&<div style={{textAlign:"center",padding:"16px 0",color:C.b4,fontSize:12}}>No pending requests.</div>}
+      {pending.map(to=>{const isApp=appId===to.id;
+        return<div key={to.id} style={{padding:"12px 0",borderBottom:`1px solid ${C.b1}`}}>
+          <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+            <Avatar name={to.VAName} size={30}/>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.t2}}>{to.VAName}</div>
+              <div style={{fontSize:11,color:C.b4,marginTop:2}}>
+                <Badge type={to.RequestType==="PTO"?"in":to.RequestType==="Sick"?"wn":"pu"} dot={false}>{to.RequestType}</Badge>
+                {" "}{fD(to.StartDate)}{to.EndDate&&to.EndDate!==to.StartDate?` – ${fD(to.EndDate)}`:""}{to.HoursRequested?` · ${to.HoursRequested}h`:""} · Requested {fD(to.RequestedDate)}
+              </div>
+              {to.VANotes&&<div style={{fontSize:11,color:C.b6,background:C.tl00,padding:"4px 8px",borderRadius:4,marginTop:4}}>"{to.VANotes}"</div>}
+            </div>
+            {!isApp&&<div style={{display:"flex",gap:4}}>
+              <button style={{...ss.btn(C.ok),...ss.xs}} onClick={()=>{setAppId(to.id);setPaid("TBD");setANotes("");setSupConf(false);}}>Review</button>
+              <button style={{...ss.btnO(C.er,"rgba(184,59,42,0.3)"),...ss.xs}} onClick={()=>{const n=prompt("Reason for denial:");if(n!==null)onDeny(to.id,n);}}>Deny</button>
+            </div>}
+          </div>
+          {isApp&&<div style={{marginTop:10,background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:6,padding:12}}>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+              <div style={{flex:1,minWidth:120}}><label style={ss.label}>Paid Status *</label><select style={ss.select} value={paid} onChange={e=>setPaid(e.target.value)}><option value="TBD">TBD — Decide later</option><option value="Paid">Paid</option><option value="Unpaid">Unpaid</option><option value="Partial">Partial</option></select></div>
+              <div style={{flex:0,display:"flex",alignItems:"flex-end",gap:6,paddingBottom:2}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.t2,display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}><input type="checkbox" checked={supConf} onChange={e=>setSupConf(e.target.checked)}/> Supervisor confirmed paid/unpaid</label>
+              </div>
+            </div>
+            <label style={ss.label}>Admin Notes</label>
+            <textarea style={{...ss.input,minHeight:40,marginBottom:8}} value={aNotes} onChange={e=>setANotes(e.target.value)} placeholder="Notes on approval, supervisor confirmation, etc."/>
+            <div style={{display:"flex",gap:6}}>
+              <button style={{...ss.btn(C.ok),...ss.xs,flex:1}} onClick={()=>{onApprove(to.id,paid,aNotes,supConf);setAppId(null);}}>✓ Approve</button>
+              <button style={{...ss.btnO(C.er,"rgba(184,59,42,0.3)"),...ss.xs}} onClick={()=>{const n=prompt("Reason?");if(n!==null){onDeny(to.id,n);setAppId(null);}}}>Deny</button>
+              <button style={{...ss.btnO(C.b4,C.b2),...ss.xs}} onClick={()=>setAppId(null)}>Cancel</button>
+            </div>
+          </div>}
+        </div>;})}
+    </div>
+
+    {/* Quick Log — Callout & Early Departure */}
+    <div style={{...ss.card,borderTop:`3px solid ${C.er}`}}>
+      <div style={ss.cardT}>⚡ Quick Log — Same Day</div><div style={{...ss.cardS,marginBottom:12}}>Log callouts and early departures for today</div>
+      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:200,background:C.erb,border:`1px solid rgba(184,59,42,0.15)`,borderRadius:6,padding:12}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.er,marginBottom:8}}>📞 Callout</div>
+          <div style={{marginBottom:8}}><label style={ss.label}>VA</label><select style={ss.select} value={coVa} onChange={e=>setCoVa(e.target.value)}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
+          <input style={{...ss.input,marginBottom:8}} value={coNotes} onChange={e=>setCoNotes(e.target.value)} placeholder="Reason (optional)"/>
+          <button style={{...ss.btn(C.er),...ss.xs,width:"100%"}} onClick={()=>{if(!coVa)return;const va=data.vas.find(v=>v.Email===coVa);onLogCallout(coVa,va?.Name||coVa,coNotes);setCoVa("");setCoNotes("");}}>Log Callout</button>
+        </div>
+        <div style={{flex:1,minWidth:200,background:C.wnb,border:`1px solid rgba(168,111,8,0.15)`,borderRadius:6,padding:12}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.wn,marginBottom:8}}>🕐 Early Departure</div>
+          <div style={{marginBottom:8}}><label style={ss.label}>VA</label><select style={ss.select} value={edVa} onChange={e=>setEdVa(e.target.value)}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
+          <div style={{marginBottom:8}}><label style={ss.label}>Departure Time</label><input style={ss.input} type="time" value={edTime} onChange={e=>setEdTime(e.target.value)}/></div>
+          <input style={{...ss.input,marginBottom:8}} value={edNotes} onChange={e=>setEdNotes(e.target.value)} placeholder="Reason (optional)"/>
+          <button style={{...ss.btn(C.wn),...ss.xs,width:"100%"}} onClick={()=>{if(!edVa||!edTime)return;const va=data.vas.find(v=>v.Email===edVa);onLogEarlyDeparture(edVa,va?.Name||edVa,edTime,edNotes);setEdVa("");setEdTime("");setEdNotes("");}}>Log Early Departure</button>
+        </div>
+      </div>
+    </div>
+
+    {/* Upcoming Approved */}
+    <div style={ss.card}>
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
+        {[{k:"pending",l:"Upcoming"},{k:"history",l:"History"}].map(v=><button key={v.k} style={view===v.k?ss.btn(C.teal):ss.btnO(C.t2,C.b2)} onClick={()=>setView(v.k)}>{v.l}</button>)}
+      </div>
+      {view==="pending"&&<div>
+        {!upcoming.length&&<div style={{textAlign:"center",padding:"16px 0",color:C.b4,fontSize:12}}>No upcoming approved time off.</div>}
+        {upcoming.map(to=><div key={to.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:`1px solid ${C.b1}`}}>
+          <Avatar name={to.VAName} size={24}/>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.t2}}>{to.VAName}</div>
+            <div style={{fontSize:10,color:C.b4}}>{fD(to.StartDate)}{to.EndDate&&to.EndDate!==to.StartDate?` – ${fD(to.EndDate)}`:""} · <Badge type={to.RequestType==="PTO"?"in":to.RequestType==="Sick"?"wn":"pu"} dot={false}>{to.RequestType}</Badge></div>
+          </div>
+          <Badge type={to.PaidStatus==="Paid"?"ok":to.PaidStatus==="Unpaid"?"er":"wn"} dot={false}>{to.PaidStatus}</Badge>
+          {to.SupervisorConfirmed&&<span style={{fontSize:9,fontWeight:700,padding:"2px 6px",background:C.ok,color:"#fff",borderRadius:99}}>✓ Confirmed</span>}
+        </div>)}
+      </div>}
+      {view==="history"&&<div style={{overflowX:"auto"}}>
+        <div style={{borderRadius:8,border:`1px solid ${C.b1}`,overflow:"hidden"}}>
+        <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>{["VA","Type","Dates","Status","Paid","Supervisor","Notes"].map(h=><th key={h} style={ss.th}>{h}</th>)}</tr></thead><tbody>
+          {past.slice(0,30).map((to,i)=><tr key={i}>
+            <td style={{...ss.td,fontWeight:600}}>{to.VAName}</td>
+            <td style={ss.td}><Badge type={to.RequestType==="Callout"||to.RequestType==="Early Departure"?"er":to.RequestType==="PTO"?"in":"wn"} dot={false}>{to.RequestType}</Badge></td>
+            <td style={{...ss.td,fontSize:11}}>{fD(to.StartDate)}{to.EndDate&&to.EndDate!==to.StartDate?` – ${fD(to.EndDate)}`:""}{to.DepartureTime?` @ ${to.DepartureTime}`:""}</td>
+            <td style={ss.td}><Badge type={to.Status==="Approved"?"ok":to.Status==="Denied"?"er":"wn"} dot={false}>{to.Status}</Badge></td>
+            <td style={ss.td}><Badge type={to.PaidStatus==="Paid"?"ok":to.PaidStatus==="Unpaid"?"er":"wn"} dot={false}>{to.PaidStatus||"TBD"}</Badge></td>
+            <td style={ss.td}>{to.SupervisorConfirmed?<span style={{color:C.ok,fontWeight:700}}>✓</span>:<span style={{color:C.b4}}>—</span>}</td>
+            <td style={{...ss.td,fontSize:11,maxWidth:200}}>{to.AdminNotes||to.VANotes||"—"}</td>
+          </tr>)}
+        </tbody></table></div>
+      </div>}
+    </div>
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
 // SHIFT MANAGER COMPONENT
 // ══════════════════════════════════════════════════════
 function ShiftManager({data,onEditShift,onDeleteShift}){
@@ -1306,7 +1528,7 @@ function NoticeManager({config,onUpdateConfig}){
 // ══════════════════════════════════════════════════════
 // ADMIN VIEW (with sub-navigation)
 // ══════════════════════════════════════════════════════
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onEditShift,onDeleteShift,onAddGuest,onDeactivateGuest,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
+function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onApproveTimeOff,onDenyTimeOff,onLogCallout,onLogEarlyDeparture,onEditShift,onDeleteShift,onAddGuest,onDeactivateGuest,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
   const[sub,setSub]=useState("team");
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");const[aProps,setAProps]=useState([]);
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");const[rProps,setRProps]=useState([]);
@@ -1339,7 +1561,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
   function saveEdit(i){const u=[...rTasks];u[i]={...u[i],description:editDesc};saveRec(u);setEditIdx(null);}
 
   // Sub-nav tabs
-  const subTabs=[{k:"team",l:"👥 Team"},{k:"sched",l:"🔄 Recurring"},{k:"port",l:"🏠 Portfolio"},{k:"guests",l:"🔑 Guests"},{k:"settings",l:"⚙ Settings"}];
+  const subTabs=[{k:"team",l:"👥 Team"},{k:"sched",l:"🔄 Recurring"},{k:"port",l:"🏠 Portfolio"},{k:"timeoff",l:"📅 Time Off"},{k:"guests",l:"🔑 Guests"},{k:"settings",l:"⚙ Settings"}];
   // Group employees by role
   const emps=data.employees.filter(e=>e.EmployeeActive!==false);
   const roleGroups=[{key:"va",label:"Virtual Assistants",bg:C.tl0,fg:C.t2,emps:emps.filter(e=>detectRole(e)==="va")},{key:"mgr",label:"Property Managers",bg:C.gl,fg:C.g2,emps:emps.filter(e=>detectRole(e)==="manager")},{key:"regional",label:"Regional / Portfolio",bg:C.infb,fg:C.inf,emps:emps.filter(e=>detectRole(e)==="regional")},{key:"admin",label:"Admins",bg:C.erb,fg:C.er,emps:emps.filter(e=>detectRole(e)==="admin")}];
@@ -1526,6 +1748,9 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
           return<div style={{padding:10,background:C.wnb,borderRadius:6,marginTop:8,border:`1px solid rgba(168,111,8,0.2)`}}><div style={{fontSize:10,fontWeight:700,color:C.wn,marginBottom:4}}>⚠ Unassigned ({un.length})</div>{un.map(p=><div key={p.Title} style={{fontSize:11,color:C.b6,padding:"2px 0"}}>{p.PropertyName} ({p.Units}u) — {p.PMName}</div>)}</div>;})()}
       </div>
     </div>}
+
+    {/* ── TIME OFF ── */}
+    {sub==="timeoff"&&<TimeOffAdmin data={data} myEmail={myEmail} acct={acct} myEmp={myEmp} onApprove={onApproveTimeOff} onDeny={onDenyTimeOff} onLogCallout={onLogCallout} onLogEarlyDeparture={onLogEarlyDeparture}/>}
 
     {/* ── GUESTS ── */}
     {sub==="guests"&&<div>
