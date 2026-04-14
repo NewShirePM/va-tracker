@@ -203,6 +203,12 @@ function App(){
       if(!me){setRole(null);setError("access_denied");}
       else{const r=detectRole(me);if(!r){setRole(null);setError("access_denied");}else{setRole(r);setError(null);setMyEmp(me);}}
       buildQueue(d,email,timersRef.current);
+      // Restore active shift from SharePoint (clock-in persists across page refresh)
+      const activeShift=d.activities.find(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===email&&a.StartTime&&!a.EndTime&&a.Status!=="Deleted");
+      if(activeShift&&!shift){
+        const bks=activeShift.BreaksJSON?JSON.parse(activeShift.BreaksJSON):[];
+        setShift({ClockIn:activeShift.StartTime,Breaks:bks,_ob:false,_bs:null,_spId:activeShift.id});
+      }
       setLoading(false);
     }).catch(e=>{setError("load_error: "+e.message);setLoading(false);});
   },[token,acct]);
@@ -445,7 +451,17 @@ function App(){
   }
 
   // ── Shift clock ──
-  function clockIn(){if(shift){fl("Already clocked in!");return;}setShift({ClockIn:new Date().toISOString(),Breaks:[],_ob:false,_bs:null});fl("Clocked in!");}
+  async function clockIn(vaEmail,vaName){
+    const targetEmail=vaEmail||myEmail;const targetName=vaName||myEmp?.Name||myEmail;
+    if(!vaEmail&&shift){fl("Already clocked in!");return;}
+    try{const t=await gT();
+      const now=new Date().toISOString();
+      const res=await gPost(t,lUrl("VA_Activity"),{Title:`${targetName}-${today()}`,ActivityType:"Shift",VAEmail:targetEmail,VAName:targetName,ActivityDate:now,StartTime:now,Status:"Active"});
+      if(!vaEmail){setShift({ClockIn:now,Breaks:[],_ob:false,_bs:null,_spId:res.id});fl("Clocked in!");}
+      else{fl(`${targetName} clocked in!`);}
+      await reload();
+    }catch(e){fl("Error clocking in: "+e.message);}
+  }
   function startBreak(){setShift(p=>p?{...p,_ob:true,_bs:new Date().toISOString()}:p);}
   function endBreak(){setShift(p=>{if(!p||!p._bs)return p;return{...p,_ob:false,Breaks:[...p.Breaks,{s:p._bs,e:new Date().toISOString()}],_bs:null};});}
   async function clockOut(){
@@ -453,7 +469,12 @@ function App(){
     if(shift._ob&&shift._bs)bks.push({s:shift._bs,e:now.toISOString()});
     const bMs=bks.reduce((s,b)=>s+(new Date(b.e)-new Date(b.s)),0);
     const bMin=Math.round(bMs/6e4);const wMin=Math.round((now-new Date(shift.ClockIn)-bMs)/6e4);
-    try{const t=await gT();await gPost(t,lUrl("VA_Activity"),{Title:`${myEmp?.Name||myEmail}-${today()}`,ActivityType:"Shift",VAEmail:myEmail,VAName:myEmp?.Name||myEmail,ActivityDate:shift.ClockIn,StartTime:shift.ClockIn,EndTime:now.toISOString(),BreakMinutes:bMin,WorkMinutes:wMin,BreaksJSON:JSON.stringify(bks)});
+    try{const t=await gT();
+      if(shift._spId){
+        await gPatch(t,iUrl("VA_Activity",shift._spId),{EndTime:now.toISOString(),BreakMinutes:bMin,WorkMinutes:wMin,BreaksJSON:JSON.stringify(bks),Status:"Completed"});
+      }else{
+        await gPost(t,lUrl("VA_Activity"),{Title:`${myEmp?.Name||myEmail}-${today()}`,ActivityType:"Shift",VAEmail:myEmail,VAName:myEmp?.Name||myEmail,ActivityDate:shift.ClockIn,StartTime:shift.ClockIn,EndTime:now.toISOString(),BreakMinutes:bMin,WorkMinutes:wMin,BreaksJSON:JSON.stringify(bks),Status:"Completed"});
+      }
       setShift(null);fl("Clocked out!");await reload();
     }catch(e){fl("Error: "+e.message);}
   }
@@ -634,11 +655,11 @@ function App(){
       {/* Content */}
       <div style={ss.content}>
         {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSubmitMetrics={submitDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} onReplyToReview={replyToReview} onRequestTimeOff={requestTimeOff} reviews={data.activities.filter(a=>a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")} isAdmin={isAdmin} fl={fl}/>}
-        {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} onReplyToReview={replyToReview} myEmail={myEmail} acct={acct} myEmail={myEmail} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
+        {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} onReplyToReview={replyToReview} myEmail={myEmail} acct={acct} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
         {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
         {ck==="coach"&&<CoachingView data={data} onSaveNote={saveCoachingNote}/>}
         {ck==="hist"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
-        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onApproveTimeOff={approveTimeOff} onDenyTimeOff={denyTimeOff} onLogCallout={logCallout} onLogEarlyDeparture={logEarlyDeparture} onEditShift={editShift} onDeleteShift={deleteShift} onAddGuest={addGuest} onDeactivateGuest={deactivateGuest} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
+        {ck==="admin"&&<AdminView data={data} myEmail={myEmail} myEmp={myEmp} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onApproveTimeOff={approveTimeOff} onDenyTimeOff={denyTimeOff} onLogCallout={logCallout} onLogEarlyDeparture={logEarlyDeparture} onEditShift={editShift} onDeleteShift={deleteShift} onClockInVA={clockIn} onAddGuest={addGuest} onDeactivateGuest={deactivateGuest} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
       </div>
     </div>
   );
@@ -1318,7 +1339,9 @@ function TimeOffAdmin({data,myEmail,acct,myEmp,onApprove,onDeny,onLogCallout,onL
   const[coVa,setCoVa]=useState("");const[coNotes,setCoNotes]=useState("");
   const[edVa,setEdVa]=useState("");const[edTime,setEdTime]=useState("");const[edNotes,setEdNotes]=useState("");
   const[view,setView]=useState("pending");
+  if(!data)return(<div style={ss.card}><div style={{color:C.b4,fontSize:12}}>Loading time off data...</div></div>);
   const timeOff=data.timeOff||[];
+  const vas=data.vas||[];
   const pending=timeOff.filter(t=>t.Status==="Pending");
   const approved=timeOff.filter(t=>t.Status==="Approved").sort((a,b)=>(a.StartDate||"").localeCompare(b.StartDate||""));
   const upcoming=approved.filter(t=>t.StartDate?.slice(0,10)>=today());
@@ -1373,16 +1396,16 @@ function TimeOffAdmin({data,myEmail,acct,myEmp,onApprove,onDeny,onLogCallout,onL
       <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
         <div style={{flex:1,minWidth:200,background:C.erb,border:`1px solid rgba(184,59,42,0.15)`,borderRadius:6,padding:12}}>
           <div style={{fontSize:12,fontWeight:700,color:C.er,marginBottom:8}}>📞 Callout</div>
-          <div style={{marginBottom:8}}><label style={ss.label}>VA</label><select style={ss.select} value={coVa} onChange={e=>setCoVa(e.target.value)}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
+          <div style={{marginBottom:8}}><label style={ss.label}>VA</label><select style={ss.select} value={coVa} onChange={e=>setCoVa(e.target.value)}><option value="">Select...</option>{vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <input style={{...ss.input,marginBottom:8}} value={coNotes} onChange={e=>setCoNotes(e.target.value)} placeholder="Reason (optional)"/>
-          <button style={{...ss.btn(C.er),...ss.xs,width:"100%"}} onClick={()=>{if(!coVa)return;const va=data.vas.find(v=>v.Email===coVa);onLogCallout(coVa,va?.Name||coVa,coNotes);setCoVa("");setCoNotes("");}}>Log Callout</button>
+          <button style={{...ss.btn(C.er),...ss.xs,width:"100%"}} onClick={()=>{if(!coVa)return;const va=vas.find(v=>v.Email===coVa);onLogCallout(coVa,va?.Name||coVa,coNotes);setCoVa("");setCoNotes("");}}>Log Callout</button>
         </div>
         <div style={{flex:1,minWidth:200,background:C.wnb,border:`1px solid rgba(168,111,8,0.15)`,borderRadius:6,padding:12}}>
           <div style={{fontSize:12,fontWeight:700,color:C.wn,marginBottom:8}}>🕐 Early Departure</div>
-          <div style={{marginBottom:8}}><label style={ss.label}>VA</label><select style={ss.select} value={edVa} onChange={e=>setEdVa(e.target.value)}><option value="">Select...</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
+          <div style={{marginBottom:8}}><label style={ss.label}>VA</label><select style={ss.select} value={edVa} onChange={e=>setEdVa(e.target.value)}><option value="">Select...</option>{vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
           <div style={{marginBottom:8}}><label style={ss.label}>Departure Time</label><input style={ss.input} type="time" value={edTime} onChange={e=>setEdTime(e.target.value)}/></div>
           <input style={{...ss.input,marginBottom:8}} value={edNotes} onChange={e=>setEdNotes(e.target.value)} placeholder="Reason (optional)"/>
-          <button style={{...ss.btn(C.wn),...ss.xs,width:"100%"}} onClick={()=>{if(!edVa||!edTime)return;const va=data.vas.find(v=>v.Email===edVa);onLogEarlyDeparture(edVa,va?.Name||edVa,edTime,edNotes);setEdVa("");setEdTime("");setEdNotes("");}}>Log Early Departure</button>
+          <button style={{...ss.btn(C.wn),...ss.xs,width:"100%"}} onClick={()=>{if(!edVa||!edTime)return;const va=vas.find(v=>v.Email===edVa);onLogEarlyDeparture(edVa,va?.Name||edVa,edTime,edNotes);setEdVa("");setEdTime("");setEdNotes("");}}>Log Early Departure</button>
         </div>
       </div>
     </div>
@@ -1425,16 +1448,27 @@ function TimeOffAdmin({data,myEmail,acct,myEmp,onApprove,onDeny,onLogCallout,onL
 // ══════════════════════════════════════════════════════
 // SHIFT MANAGER COMPONENT
 // ══════════════════════════════════════════════════════
-function ShiftManager({data,onEditShift,onDeleteShift}){
-  const[editId,setEditId]=useState(null);const[eIn,setEIn]=useState("");const[eOut,setEOut]=useState("");const[eBrk,setEBrk]=useState("");const[filterVa,setFilterVa]=useState("");
+function ShiftManager({data,onEditShift,onDeleteShift,onClockInVA}){
+  const[editId,setEditId]=useState(null);const[eIn,setEIn]=useState("");const[eOut,setEOut]=useState("");const[eBrk,setEBrk]=useState("");const[filterVa,setFilterVa]=useState("");const[ciVa,setCiVa]=useState("");
   const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&a.Status!=="Deleted").sort((a,b)=>(b.ActivityDate||b.StartTime||"").localeCompare(a.ActivityDate||a.StartTime||""));
   const filtered=filterVa?shifts.filter(s=>s.VAEmail?.toLowerCase()===filterVa.toLowerCase()):shifts;
+  // Active shifts (clocked in but not out)
+  const activeShifts=data.activities.filter(a=>a.ActivityType==="Shift"&&a.StartTime&&!a.EndTime&&a.Status!=="Deleted");
+  const clockedInEmails=new Set(activeShifts.map(s=>s.VAEmail?.toLowerCase()));
+  const notClockedIn=data.vas.filter(v=>!clockedInEmails.has(v.Email?.toLowerCase())&&v.VATrackerStatus!=="Out");
 
   return<div style={{...ss.card,borderTop:`3px solid ${C.inf}`}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-      <div><div style={ss.cardT}>⏱ Shift Management</div><div style={ss.cardS}>Edit or delete shift records to correct clock-in/out errors</div></div>
+      <div><div style={ss.cardT}>⏱ Shift Management</div><div style={ss.cardS}>Edit or delete shift records, manually clock in VAs</div></div>
       <div style={{minWidth:150}}><select style={ss.select} value={filterVa} onChange={e=>setFilterVa(e.target.value)}><option value="">All VAs</option>{data.vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}</select></div>
     </div>
+    {/* Manual Clock-In */}
+    {notClockedIn.length>0&&<div style={{background:C.wnb,border:`1px solid rgba(168,111,8,0.15)`,borderRadius:6,padding:12,marginBottom:12}}>
+      <div style={{fontSize:12,fontWeight:700,color:C.wn,marginBottom:8}}>⚠ Not Clocked In Today ({notClockedIn.length})</div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        {notClockedIn.map(v=><button key={v.Email} style={{...ss.btnO(C.wn,C.wnb),...ss.xs,display:"flex",alignItems:"center",gap:4}} onClick={()=>{if(window.confirm(`Manually clock in ${v.Name}?`))onClockInVA(v.Email,v.Name);}}><Avatar name={v.Name} size={16}/> Clock In {v.Name}</button>)}
+      </div>
+    </div>}
     {filtered.length===0&&<div style={{textAlign:"center",padding:"16px 0",color:C.b4,fontSize:12}}>No shift records found.</div>}
     <div style={{borderRadius:8,border:`1px solid ${C.b1}`,overflow:"hidden"}}>
       {filtered.slice(0,20).map((s,i)=>{const isEd=editId===s.id;const hasIssue=(()=>{const otherShifts=shifts.filter(x=>x.id!==s.id&&x.VAEmail===s.VAEmail&&x.ActivityDate?.slice(0,10)===s.ActivityDate?.slice(0,10));return otherShifts.length>0;})();
@@ -1528,7 +1562,7 @@ function NoticeManager({config,onUpdateConfig}){
 // ══════════════════════════════════════════════════════
 // ADMIN VIEW (with sub-navigation)
 // ══════════════════════════════════════════════════════
-function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onApproveTimeOff,onDenyTimeOff,onLogCallout,onLogEarlyDeparture,onEditShift,onDeleteShift,onAddGuest,onDeactivateGuest,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
+function AdminView({data,myEmail,myEmp,acct,config,queue,covQ,onToggleAbsence,onAssignTask,onUpdateConfig,onAssignProp,onUnassignProp,onReassignVA,onApproveTimeOff,onDenyTimeOff,onLogCallout,onLogEarlyDeparture,onEditShift,onDeleteShift,onClockInVA,onAddGuest,onDeactivateGuest,onAddProperty,onEditProperty,onEditEmployee,onDeleteTask}){
   const[sub,setSub]=useState("team");
   const[showAssign,setShowAssign]=useState(false);const[aVa,setAVa]=useState("");const[aCat,setACat]=useState("");const[aPri,setAPri]=useState("Normal");const[aDesc,setADesc]=useState("");const[aNotes,setANotes]=useState("");const[aProps,setAProps]=useState([]);
   const[showRec,setShowRec]=useState(false);const[rVa,setRVa]=useState("");const[rCat,setRCat]=useState("");const[rDesc,setRDesc]=useState("");const[rProps,setRProps]=useState([]);
@@ -1814,7 +1848,7 @@ function AdminView({data,myEmail,acct,config,queue,covQ,onToggleAbsence,onAssign
       </div>
 
       {/* Shift Management */}
-      <ShiftManager data={data} onEditShift={onEditShift} onDeleteShift={onDeleteShift}/>
+      <ShiftManager data={data} onEditShift={onEditShift} onDeleteShift={onDeleteShift} onClockInVA={onClockInVA}/>
 
       {/* Absence Management */}
       <div style={{...ss.card,borderTop:`3px solid ${C.er}`}}>
