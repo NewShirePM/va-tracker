@@ -684,7 +684,7 @@ function App(){
       <div style={ss.content}>
         {ck==="myday"&&<MyDayView data={data} role={role} myEmail={myEmail} myVa={myVa} myProps={myProps} queue={queue} covQ={covQ} shift={shift} timers={timers} tick={tick} overdue={myOverdue} config={data?.config} onClockIn={clockIn} onBreakStart={startBreak} onBreakEnd={endBreak} onClockOut={clockOut} onStartTimer={startTimer} onPause={pauseTimer} onResume={resumeTimer} onFinish={finishTimer} onCancel={cancelTimer} onClaimCov={claimCov} onAddTask={addTask} onDeleteTask={deleteTask} onLogInterruption={logInterruption} onSaveMetrics={saveDailyMetrics} onSendReview={sendReview} onResolveReview={resolveReview} onReplyToReview={replyToReview} onRequestTimeOff={requestTimeOff} reviews={data.activities.filter(a=>a.ActivityType==="Review"||a.ActivityType==="ReviewResponse")} isAdmin={isAdmin} fl={fl}/>}
         {ck==="mgr"&&<ManagerView data={data} onResolveReview={resolveReview} onReplyToReview={replyToReview} onAssignReviewProp={assignReviewProperty} myEmail={myEmail} acct={acct} myEmp={myEmp} mgrProps={isAdmin?data.properties:mgrProps} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} onAddTask={addTask} getVA={getVAForProperty} isAdmin={isAdmin} isRegional={isRegional}/>}
-        {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps}/>}
+        {ck==="dash"&&<DashboardView data={data} queue={queue} timers={timers} covQ={covQ} overdue={overdueTasks} dfFrom={dfFrom} dfTo={dfTo} setDfFrom={setDfFrom} setDfTo={setDfTo} isAdmin={isAdmin} role={role} mgrProps={mgrProps} myEmail={myEmail}/>}
         {ck==="coach"&&<CoachingView data={data} onSaveNote={saveCoachingNote}/>}
         {ck==="hist"&&<HistoryView data={data} role={role} myEmail={myEmail} isMgr={isMgr} mgrProps={mgrProps}/>}
         {ck==="admin"&&<AdminView data={data} myEmail={myEmail} myEmp={myEmp} acct={acct} config={data?.config} queue={queue} covQ={covQ} onToggleAbsence={toggleAbsence} onAssignTask={addTask} onUpdateConfig={updateConfig} onAssignProp={assignProp} onUnassignProp={unassignProp} onReassignVA={reassignPropertyVA} onApproveTimeOff={approveTimeOff} onDenyTimeOff={denyTimeOff} onLogCallout={logCallout} onLogEarlyDeparture={logEarlyDeparture} onEditShift={editShift} onDeleteShift={deleteShift} onClockInVA={clockIn} onAddGuest={addGuest} onDeactivateGuest={deactivateGuest} onAddProperty={addProperty} onEditProperty={editProperty} onEditEmployee={editEmployee} onDeleteTask={deleteTask}/>}
@@ -888,11 +888,18 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
         {/* Pending */}
         {pending.length>0&&<div style={{marginBottom:10}}>
           <div style={{fontSize:10,fontWeight:700,color:C.wn,textTransform:"uppercase",marginBottom:6}}>Awaiting PM Response</div>
-          {pending.map((r,i)=><div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${C.b1}`}}>
-            <div style={{fontSize:12,fontWeight:600,color:C.t2}}>{r.Title?.replace("Review-","")}</div>
-            <div style={{fontSize:10,color:C.b4,marginTop:2}}>{r.PropertyName} · {r.PMName||"PM"} · Sent {fD(r.ActivityDate)} {fT(r.ActivityDate)}</div>
-            <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"4px 8px",borderRadius:4,marginTop:4}}>"{r.Notes}"</div>
-          </div>)}
+          {pending.map((r,i)=>{
+            const thread=r.GroupId?allResponses.filter(a=>a.GroupId===r.GroupId).sort((a,b)=>(a.ActivityDate||"").localeCompare(b.ActivityDate||"")):[];
+            const lastResponse=thread.length?thread[thread.length-1]:null;
+            return<div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${C.b1}`}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.t2}}>{r.Title?.replace("Review-","")}</div>
+              <div style={{fontSize:10,color:C.b4,marginTop:2}}>{r.PropertyName} · {r.PMName||"PM"} · Sent {fD(r.ActivityDate)} {fT(r.ActivityDate)}</div>
+              <div style={{fontSize:11,color:C.pu,background:C.pub,padding:"4px 8px",borderRadius:4,marginTop:4}}>"{r.Notes}"</div>
+              {lastResponse&&<div style={{fontSize:11,color:C.ok,background:C.okb,border:`1px solid rgba(26,122,70,0.15)`,padding:"4px 8px",borderRadius:4,marginTop:4}}>
+                <span style={{fontSize:9,fontWeight:700,color:C.ok}}>{lastResponse.AssignedByName||"PM"}:</span> "{lastResponse.Notes}"
+              </div>}
+              <ReviewReplyBox reviewId={r.id} onReply={onReplyToReview} label="VA"/>
+            </div>;})}
         </div>}
         {/* Resolved */}
         {resolved.length>0&&<div>
@@ -1229,12 +1236,13 @@ function liveShiftMin(shifts,vaEmail){
   return total;
 }
 
-function DashboardView({data,queue,timers,covQ,overdue,dfFrom,dfTo,setDfFrom,setDfTo,isAdmin,role,mgrProps}){
+function DashboardView({data,queue,timers,covQ,overdue,dfFrom,dfTo,setDfFrom,setDfTo,isAdmin,role,mgrProps,myEmail}){
   if(!data)return null;
   const propIds=role==="manager"?new Set(mgrProps.map(p=>p.Title)):null;
-  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!propIds||propIds.has(a.PropertyId)));
+  const vaEmail=role==="va"?myEmail?.toLowerCase():null;
+  const tasks=data.activities.filter(a=>a.ActivityType==="Task"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!propIds||propIds.has(a.PropertyId))&&(!vaEmail||a.VAEmail?.toLowerCase()===vaEmail));
   const done=tasks.filter(a=>a.Status==="Completed");const blocked=tasks.filter(a=>a.Status==="Blocked");const inc=tasks.filter(a=>a.Status==="Incomplete");
-  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(a.ActivityDate,dfFrom,dfTo));
+  const shifts=data.activities.filter(a=>a.ActivityType==="Shift"&&inRange(a.ActivityDate,dfFrom,dfTo)&&(!vaEmail||a.VAEmail?.toLowerCase()===vaEmail));
   const shiftMin=liveShiftMin(shifts);const taskMin=done.reduce((s,a)=>s+(a.DurationMin||0),0);
   const rate=tasks.length?Math.round(done.length/tasks.length*100):0;const util=shiftMin>0?Math.round(taskMin/shiftMin*100):0;
   const filteredVAs=propIds?data.vas.filter(v=>data.portfolios.some(p=>propIds.has(p.PropertyId)&&p.VAEmail?.toLowerCase()===v.Email.toLowerCase())):data.vas;
