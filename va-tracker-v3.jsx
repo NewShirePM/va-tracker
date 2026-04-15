@@ -244,16 +244,19 @@ function App(){
         if(va&&va.VATrackerStatus!=="Out"){console.log("[VT] Auto-out:",va.Name,"- scheduled time off");}
       });
     }
+      // Build existing set from ALL today's tasks (any status) — case insensitive
       const todayTasks=d.activities.filter(a=>a.ActivityType==="Task"&&a.ActivityDate&&a.ActivityDate.slice(0,10)===td);
-      const existing=new Set(todayTasks.map(t=>`${t.VAEmail}|${t.Title}`));
-      persistedQueued.forEach(a=>{existing.add(`${a.VAEmail}|${a.Title}`);});
+      const existing=new Set(todayTasks.map(t=>`${(t.VAEmail||"").toLowerCase()}|${t.Title}`));
+      // Also include queued tasks we just loaded
+      persistedQueued.forEach(a=>{existing.add(`${(a.VAEmail||"").toLowerCase()}|${a.Title}`);});
       const toSave=[];
       d.config.recurringTasks.forEach(rt=>{
         if(!rt.active)return;
         const freq=rt.frequency||"daily";
         if(freq==="weekly"){const wd=rt.weekDay||1;if(dow!==wd)return;}
-        const key=`${rt.vaEmail}|${rt.description}`;
+        const key=`${(rt.vaEmail||"").toLowerCase()}|${rt.description}`;
         if(existing.has(key))return;
+        existing.add(key); // Prevent intra-run duplicates
         const va=d.vas.find(v=>v.Email&&v.Email.toLowerCase()===rt.vaEmail.toLowerCase());
         if(!va)return;
         const prop=rt.propertyId?d.properties.find(p=>p.Title===rt.propertyId):null;
@@ -262,12 +265,15 @@ function App(){
         if(va.VATrackerStatus==="Out"){task.Source="Coverage";task.CoverageForEmail=va.Email;task.CoverageForName=va.Name;}
         toSave.push(task);
       });
+      // Set queue FIRST with what we loaded from SP, then append newly generated tasks
+      setQueue(q);setCovQ(cv);
       if(toSave.length>0){
         (async()=>{try{const tk=await gT();for(const task of toSave){const res=await gPost(tk,lUrl("VA_Activity"),{Title:task.Title,ActivityType:"Task",VAEmail:task.VAEmail,VAName:task.VAName,ActivityDate:task.ActivityDate,PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category,Source:task.Source,Status:task.Status,Priority:task.Priority||"Normal",CoverageForEmail:task.CoverageForEmail||"",CoverageForName:task.CoverageForName||""});
           const saved={...task,_localId:res.id,_spId:res.id,id:res.id};
           if(task.Source==="Coverage"){setCovQ(p=>[...p,saved]);}else{setQueue(p=>[...p,saved]);}
         }}catch(e){console.error("[VT] Daily task gen error:",e);}})();
       }
+      return; // Already set queue/covQ above
     }
     setQueue(q);setCovQ(cv);
   }
@@ -471,6 +477,8 @@ function App(){
 
   // ── Shift clock ──
   async function clockIn(vaEmail,vaName){
+    // Guard against React event objects being passed as first arg
+    if(vaEmail&&typeof vaEmail==="object"){vaEmail=undefined;vaName=undefined;}
     const targetEmail=vaEmail||myEmail;const targetName=vaName||myEmp?.Name||myEmail;
     if(!vaEmail&&shift){fl("Already clocked in!");return;}
     try{const t=await gT();
@@ -746,7 +754,7 @@ function MyDayView({data,role,myEmail,myVa,myProps,queue,covQ,shift,timers,tick,
 
     {/* Shift Clock — full width */}
     <div style={{background:C.tl00,border:`1px solid ${C.tl}`,borderRadius:8,padding:14,marginBottom:12,boxShadow:"0 1px 3px rgba(28,55,64,0.07)"}}>
-      {!shift?(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:11,fontWeight:700,color:C.b4,textTransform:"uppercase"}}>Shift Clock</div><div style={{fontSize:10,color:C.b4,marginTop:1}}>Not clocked in</div></div><button style={ss.btn(C.inf)} onClick={onClockIn}>☀ Clock In</button></div>
+      {!shift?(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:11,fontWeight:700,color:C.b4,textTransform:"uppercase"}}>Shift Clock</div><div style={{fontSize:10,color:C.b4,marginTop:1}}>Not clocked in</div></div><button style={ss.btn(C.inf)} onClick={()=>onClockIn()}>☀ Clock In</button></div>
       ):(<div>
         <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:11}}>
           <div style={{width:8,height:8,borderRadius:"50%",background:shift._ob?C.wn:C.ok,position:"relative"}}/>
