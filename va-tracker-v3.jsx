@@ -172,6 +172,8 @@ function App(){
   useEffect(()=>{if(!token||!acct||guestToken)return;const id=setInterval(()=>{reload().catch(e=>console.warn("[VT] Auto-refresh failed:",e));},300000);return()=>clearInterval(id);},[token,acct]);
   const fl=useCallback(msg=>{setFlash(msg);setTimeout(()=>setFlash(""),2500);},[]);
   async function gT(){return(await refresh())||token;}
+  // Expose token getter for descendant components that need Graph access outside the main app state
+  useEffect(()=>{window.__vtGetToken=async()=>(await refresh())||token;},[refresh,token]);
 
   // ── Guest Data Loading (via Cloudflare Worker) ──
   useEffect(()=>{
@@ -205,7 +207,7 @@ function App(){
       const me=d.employees.find(e=>(e.Email&&e.Email.toLowerCase()===email)||(e.M365UserId&&e.M365UserId.toLowerCase()===email)||(e.Email&&email.split("@")[0]===e.Email.toLowerCase().split("@")[0]));
       if(!me){setRole(null);setError("access_denied");}
       else{const r=detectRole(me);if(!r){setRole(null);setError("access_denied");}else{setRole(r);setError(null);setMyEmp(me);}}
-      buildQueue(d,email,timersRef.current);
+      buildQueue(d,email,timersRef.current,me);
       // Restore active shift from SharePoint (clock-in persists across page refresh)
       const activeShift=d.activities.find(a=>a.ActivityType==="Shift"&&a.VAEmail?.toLowerCase()===email&&a.StartTime&&!a.EndTime&&a.Status!=="Deleted");
       if(activeShift&&!shift){
@@ -216,7 +218,8 @@ function App(){
     }).catch(e=>{setError("load_error: "+e.message);setLoading(false);});
   },[token,acct]);
 
-  function buildQueue(d,email,currentTimers=[]){
+  function buildQueue(d,email,currentTimers=[],empArg=null){
+    const currentEmp=empArg||myEmp;
     const timerSpIds=new Set(currentTimers.map(t=>t._spId).filter(Boolean));
     const td=today();
     // Only load TODAY's queued tasks into the active queue — older ones show in overdue section only
@@ -237,43 +240,61 @@ function App(){
       const td=today();
       const dow=new Date().getDay();
       if(dow===0||dow===6){setQueue(q);setCovQ(cv);return;} // Skip weekends
-    // Auto-out for scheduled time off
-    if(d.timeOff){
-      d.timeOff.filter(to=>to.Status==="Approved"&&to.StartDate?.slice(0,10)<=td&&(to.EndDate?.slice(0,10)>=td||!to.EndDate)).forEach(to=>{
-        const va=d.vas.find(v=>v.Email?.toLowerCase()===to.VAEmail?.toLowerCase());
-        if(va&&va.VATrackerStatus!=="Out"){console.log("[VT] Auto-out:",va.Name,"- scheduled time off");}
-      });
-    }
-      // Build existing set from ALL today's tasks (any status) — case insensitive
+      // Build set of VAs out today — manual status OR approved scheduled time off
+      const scheduledOutEmails=new Set();
+      if(d.timeOff){
+        d.timeOff.filter(to=>to.Status==="Approved"&&to.StartDate?.slice(0,10)<=td&&(to.EndDate?.slice(0,10)>=td||!to.EndDate)).forEach(to=>{
+          if(to.VAEmail)scheduledOutEmails.add(to.VAEmail.toLowerCase());
+        });
+      }
+      const isVaOut=(va)=>va.VATrackerStatus==="Out"||scheduledOutEmails.has((va.Email||"").toLowerCase());
+      // Build existing set — includes PropertyId to allow same task across multiple properties
       const todayTasks=d.activities.filter(a=>a.ActivityType==="Task"&&a.ActivityDate&&a.ActivityDate.slice(0,10)===td);
-      const existing=new Set(todayTasks.map(t=>`${(t.VAEmail||"").toLowerCase()}|${t.Title}`));
-      // Also include queued tasks we just loaded
-      persistedQueued.forEach(a=>{existing.add(`${(a.VAEmail||"").toLowerCase()}|${a.Title}`);});
+      const existing=new Set(todayTasks.map(t=>`${(t.VAEmail||"").toLowerCase()}|${t.Title}|${t.PropertyId||""}`));
+      persistedQueued.forEach(a=>{existing.add(`${(a.VAEmail||"").toLowerCase()}|${a.Title}|${a.PropertyId||""}`);});
+      // Scope: current user generates own tasks + absent VA tasks (admin/manager only)
+      const currentUserRole=currentEmp?detectRole(currentEmp):null;
+      const canGenerateForAbsent=currentUserRole==="admin"||currentUserRole==="manager";
       const toSave=[];
       d.config.recurringTasks.forEach(rt=>{
         if(!rt.active)return;
         const freq=rt.frequency||"daily";
         if(freq==="weekly"){const wd=rt.weekDay||1;if(dow!==wd)return;}
-        const key=`${(rt.vaEmail||"").toLowerCase()}|${rt.description}`;
-        if(existing.has(key))return;
-        existing.add(key); // Prevent intra-run duplicates
-        const va=d.vas.find(v=>v.Email&&v.Email.toLowerCase()===rt.vaEmail.toLowerCase());
+        const rtEmail=(rt.vaEmail||"").toLowerCase();
+        const va=d.vas.find(v=>v.Email&&v.Email.toLowerCase()===rtEmail);
         if(!va)return;
+        const isMine=rtEmail===email.toLowerCase();
+        const vaIsOut=isVaOut(va);
+        if(!isMine && !(vaIsOut && canGenerateForAbsent))return;
+        const key=`${rtEmail}|${rt.description}|${rt.propertyId||""}`;
+        if(existing.has(key))return;
+        existing.add(key);
         const prop=rt.propertyId?d.properties.find(p=>p.Title===rt.propertyId):null;
         const cat=d.config.categories?.find(c=>c.id===rt.category);
         const task={Title:rt.description,VAEmail:va.Email,VAName:va.Name,PropertyId:rt.propertyId||"",PropertyName:prop?prop.PropertyName:"General",PMName:prop?prop.PMName:"",Category:cat?.name||"Admin/Other",Source:"Daily",Status:"Queued",Priority:"Normal",ActivityDate:td,ActivityType:"Task"};
-        if(va.VATrackerStatus==="Out"){task.Source="Coverage";task.CoverageForEmail=va.Email;task.CoverageForName=va.Name;}
+        if(vaIsOut){task.Source="Coverage";task.CoverageForEmail=va.Email;task.CoverageForName=va.Name;}
         toSave.push(task);
       });
-      // Set queue FIRST with what we loaded from SP, then append newly generated tasks
       setQueue(q);setCovQ(cv);
       if(toSave.length>0){
-        (async()=>{try{const tk=await gT();for(const task of toSave){const res=await gPost(tk,lUrl("VA_Activity"),{Title:task.Title,ActivityType:"Task",VAEmail:task.VAEmail,VAName:task.VAName,ActivityDate:task.ActivityDate,PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category,Source:task.Source,Status:task.Status,Priority:task.Priority||"Normal",CoverageForEmail:task.CoverageForEmail||"",CoverageForName:task.CoverageForName||""});
-          const saved={...task,_localId:res.id,_spId:res.id,id:res.id};
-          if(task.Source==="Coverage"){setCovQ(p=>[...p,saved]);}else{setQueue(p=>[...p,saved]);}
-        }}catch(e){console.error("[VT] Daily task gen error:",e);}})();
+        (async()=>{
+          const tk=await gT();
+          let written=0,failed=0;
+          for(const task of toSave){
+            try{
+              const res=await gPost(tk,lUrl("VA_Activity"),{Title:task.Title,ActivityType:"Task",VAEmail:task.VAEmail,VAName:task.VAName,ActivityDate:task.ActivityDate,PropertyId:task.PropertyId||"",PropertyName:task.PropertyName||"General",PMName:task.PMName||"",Category:task.Category,Source:task.Source,Status:task.Status,Priority:task.Priority||"Normal",CoverageForEmail:task.CoverageForEmail||"",CoverageForName:task.CoverageForName||""});
+              const saved={...task,_localId:res.id,_spId:res.id,id:res.id};
+              if(task.Source==="Coverage"){setCovQ(p=>[...p,saved]);}else{setQueue(p=>[...p,saved]);}
+              written++;
+            }catch(e){
+              failed++;
+              console.error("[VT] Task gen failed:",task.VAName,"/",task.Title,"—",e.message);
+            }
+          }
+          console.log(`[VT] Daily gen: ${written} written, ${failed} failed`);
+        })();
       }
-      return; // Already set queue/covQ above
+      return;
     }
     setQueue(q);setCovQ(cv);
   }
@@ -1463,6 +1484,92 @@ function HistoryView({data,role,myEmail,isMgr,mgrProps}){
   </div>);
 }
 
+// ── Admin: Schedule Time Off on behalf of a VA (auto-approves) ──
+function AdminScheduleTimeOff({vas,myEmail,myEmp,acct,onApprove}){
+  const[open,setOpen]=useState(false);
+  const[vaEmail,setVaEmail]=useState("");
+  const[type,setType]=useState("PTO");
+  const[start,setStart]=useState("");
+  const[end,setEnd]=useState("");
+  const[hours,setHours]=useState("");
+  const[paid,setPaid]=useState("Paid");
+  const[notes,setNotes]=useState("");
+  const[submitting,setSubmitting]=useState(false);
+
+  async function handleSubmit(){
+    if(!vaEmail||!start)return;
+    setSubmitting(true);
+    const va=vas.find(v=>v.Email===vaEmail);
+    try{
+      const token=await window.__vtGetToken?.();
+      if(!token){alert("Auth not ready. Try again.");setSubmitting(false);return;}
+      const siteId="vanrockre.sharepoint.com,a02c1cd8-9f1f-4827-8286-7b6b7ce74232,01202419-6625-4499-b0d5-8ceb1cffdba3";
+      const createRes=await fetch(`https://graph.microsoft.com/v1.0/sites/${siteId}/lists/VA_TimeOff/items`,{
+        method:"POST",
+        headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},
+        body:JSON.stringify({fields:{
+          Title:`TO-${Date.now().toString(36)}`,
+          VAEmail:vaEmail,
+          VAName:va?.Name||vaEmail,
+          RequestType:type,
+          StartDate:start,
+          EndDate:end||start,
+          HoursRequested:parseInt(hours)||0,
+          Status:"Pending",
+          PaidStatus:paid,
+          VANotes:notes||`Scheduled by ${myEmp?.Name||acct?.name||myEmail}`,
+          RequestedDate:new Date().toISOString()
+        }})
+      });
+      if(!createRes.ok)throw new Error(`Create failed: ${createRes.status}`);
+      const created=await createRes.json();
+      await onApprove(created.id,paid,`Scheduled by admin — ${notes||"no notes"}`,true);
+      setOpen(false);setVaEmail("");setStart("");setEnd("");setHours("");setNotes("");setType("PTO");setPaid("Paid");
+    }catch(e){
+      alert("Error: "+e.message);
+    }finally{
+      setSubmitting(false);
+    }
+  }
+
+  return<div style={{...ss.card,borderTop:`3px solid ${C.inf}`}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div><div style={ss.cardT}>📆 Schedule Time Off (Admin)</div><div style={ss.cardS}>Pre-approved entry — tasks auto-route to Coverage on those dates</div></div>
+      <button style={ss.btnO(C.t2,C.b2)} onClick={()=>setOpen(!open)}>{open?"Cancel":"Schedule"}</button>
+    </div>
+    {open&&<div style={{marginTop:12}}>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div style={{flex:1,minWidth:140}}><label style={ss.label}>VA *</label>
+          <select style={ss.select} value={vaEmail} onChange={e=>setVaEmail(e.target.value)}>
+            <option value="">Select...</option>
+            {vas.map(v=><option key={v.Email} value={v.Email}>{v.Name}</option>)}
+          </select>
+        </div>
+        <div style={{minWidth:110}}><label style={ss.label}>Type *</label>
+          <select style={ss.select} value={type} onChange={e=>setType(e.target.value)}>
+            <option>PTO</option><option>Personal</option><option>Sick</option>
+          </select>
+        </div>
+        <div style={{minWidth:110}}><label style={ss.label}>Paid *</label>
+          <select style={ss.select} value={paid} onChange={e=>setPaid(e.target.value)}>
+            <option>Paid</option><option>Unpaid</option><option>Partial</option><option>TBD</option>
+          </select>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div style={{flex:1,minWidth:130}}><label style={ss.label}>Start Date *</label><input style={ss.input} type="date" value={start} onChange={e=>setStart(e.target.value)}/></div>
+        <div style={{flex:1,minWidth:130}}><label style={ss.label}>End Date</label><input style={ss.input} type="date" value={end} onChange={e=>setEnd(e.target.value)} placeholder="Same as start"/></div>
+        <div style={{minWidth:80}}><label style={ss.label}>Hours</label><input style={ss.input} type="number" value={hours} onChange={e=>setHours(e.target.value)} placeholder="8"/></div>
+      </div>
+      <label style={ss.label}>Notes</label>
+      <textarea style={{...ss.input,minHeight:40,marginBottom:10}} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Context for the record (optional)"/>
+      <button style={{...ss.btn(C.teal),width:"100%"}} disabled={submitting||!vaEmail||!start} onClick={handleSubmit}>
+        {submitting?"Submitting...":"✓ Schedule & Approve"}
+      </button>
+    </div>}
+  </div>;
+}
+
 // ══════════════════════════════════════════════════════
 // TIME OFF ADMIN COMPONENT
 // ══════════════════════════════════════════════════════
@@ -1541,6 +1648,9 @@ function TimeOffAdmin({data,myEmail,acct,myEmp,onApprove,onDeny,onLogCallout,onL
         </div>
       </div>
     </div>
+
+    {/* Admin Scheduled Time Off Entry */}
+    <AdminScheduleTimeOff vas={vas} myEmail={myEmail} myEmp={myEmp} acct={acct} onApprove={onApprove}/>
 
     {/* Upcoming Approved */}
     <div style={ss.card}>
